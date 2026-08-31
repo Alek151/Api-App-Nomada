@@ -30,11 +30,8 @@ const registerSchema = z.object({
   preferredLanguage: z.enum(['es', 'en']).default('es'),
   deviceName: z.string().max(120).optional(),
   birthDate: z.coerce.date().max(new Date()),
-  documentType: z.enum(['dpi', 'passport']),
+  documentType: z.enum(['dpi', 'passport']).optional(),
   documentNumber: z.string().min(4).max(40),
-}).superRefine((value, ctx) => {
-  if (value.visitorType === 'local' && value.documentType !== 'dpi') ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['documentType'], message: 'Los viajeros locales deben registrar DPI.' });
-  if (value.visitorType === 'foreign' && value.documentType !== 'passport') ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['documentType'], message: 'Los visitantes deben registrar pasaporte.' });
 });
 const loginSchema = z.object({ email: z.string().email(), password: z.string().min(1), deviceName: z.string().max(120).optional() });
 
@@ -77,11 +74,11 @@ app.get('/api/v1/supabase/me', async (c) => {
 
 app.post('/api/v1/auth/register', async (c) => {
   const parsed = registerSchema.safeParse(await c.req.json().catch(() => null)); if (!parsed.success) return c.json({ error: 'validation_error', message: 'Revisa los datos enviados.', fields: parsed.error.flatten().fieldErrors }, 422);
-  const input = parsed.data; const db = getDb(c.env); const email = input.email.trim().toLowerCase(); const username = input.username.trim().toLowerCase(); const documentHash = await hashToken(input.documentNumber.trim().toUpperCase().replace(/[^A-Z0-9]/g, ''));
+  const input = parsed.data; const documentType = input.documentType ?? (input.visitorType === 'local' ? 'dpi' : 'passport'); if ((input.visitorType === 'local' && documentType !== 'dpi') || (input.visitorType === 'foreign' && documentType !== 'passport')) return c.json({ error: 'validation_error', message: 'El tipo de documento no corresponde al tipo de viajero.' }, 422); const db = getDb(c.env); const email = input.email.trim().toLowerCase(); const username = input.username.trim().toLowerCase(); const documentHash = await hashToken(input.documentNumber.trim().toUpperCase().replace(/[^A-Z0-9]/g, ''));
   const duplicate = await db.select({ id: users.id, email: users.email, username: users.username }).from(users).where(sql`${users.email} = ${email} OR ${users.username} = ${username}`).limit(1);
   if (duplicate.length) return c.json({ error: 'account_exists', message: duplicate[0].email === email ? 'Ese correo ya estÃ¡ registrado.' : 'Ese nombre de usuario no estÃ¡ disponible.' }, 409);
   const documentInUse = await db.select({ userId: profiles.userId }).from(profiles).where(eq(profiles.registrationDocumentHash, documentHash)).limit(1);
-  if (documentInUse.length) return c.json({ error: 'document_exists', message: input.documentType === 'dpi' ? 'Ese DPI ya está registrado.' : 'Ese número de pasaporte ya está registrado.' }, 409);
+  if (documentInUse.length) return c.json({ error: 'document_exists', message: documentType === 'dpi' ? 'Ese DPI ya está registrado.' : 'Ese número de pasaporte ya está registrado.' }, 409);
   const passwordHash = await hashPassword(input.password);
   const result = await db.transaction(async (tx) => {
     const [user] = await tx.insert(users).values({ email, username, passwordHash }).returning();
@@ -92,7 +89,7 @@ app.post('/api/v1/auth/register', async (c) => {
       nationality: input.nationality,
       countryCode: input.countryCode?.toUpperCase(),
       birthDate: input.birthDate,
-      registrationDocumentType: input.documentType,
+      registrationDocumentType: documentType,
       registrationDocumentHash: documentHash,
       preferredLanguage: input.preferredLanguage,
     }).returning();
