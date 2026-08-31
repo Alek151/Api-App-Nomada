@@ -19,7 +19,23 @@ app.use('*', logger());
 app.use('*', secureHeaders());
 app.use('/api/*', async (c, next) => cors({ origin: c.env.ALLOWED_ORIGINS === '*' ? '*' : c.env.ALLOWED_ORIGINS.split(',').map((x) => x.trim()), allowHeaders: ['Authorization', 'Content-Type'], allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'], maxAge: 86400 })(c, next));
 
-const registerSchema = z.object({ email: z.string().email().max(320), username: z.string().min(3).max(40).regex(/^[a-zA-Z0-9._]+$/), password: z.string().min(8).max(128), fullName: z.string().min(2).max(140), visitorType: z.enum(['local', 'foreign']), nationality: z.string().max(80).optional(), countryCode: z.string().length(2).optional(), preferredLanguage: z.enum(['es', 'en']).default('es'), deviceName: z.string().max(120).optional() });
+const registerSchema = z.object({
+  email: z.string().email().max(320),
+  username: z.string().min(3).max(40).regex(/^[a-zA-Z0-9._]+$/),
+  password: z.string().min(8).max(128),
+  fullName: z.string().min(2).max(140),
+  visitorType: z.enum(['local', 'foreign']),
+  nationality: z.string().max(80).optional(),
+  countryCode: z.string().length(2).optional(),
+  preferredLanguage: z.enum(['es', 'en']).default('es'),
+  deviceName: z.string().max(120).optional(),
+  birthDate: z.coerce.date().max(new Date()),
+  documentType: z.enum(['dpi', 'passport']),
+  documentNumber: z.string().min(4).max(40),
+}).superRefine((value, ctx) => {
+  if (value.visitorType === 'local' && value.documentType !== 'dpi') ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['documentType'], message: 'Los viajeros locales deben registrar DPI.' });
+  if (value.visitorType === 'foreign' && value.documentType !== 'passport') ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['documentType'], message: 'Los visitantes deben registrar pasaporte.' });
+});
 const loginSchema = z.object({ email: z.string().email(), password: z.string().min(1), deviceName: z.string().max(120).optional() });
 
 function publicUser(user: typeof users.$inferSelect, profile?: typeof profiles.$inferSelect) {
@@ -61,11 +77,27 @@ app.get('/api/v1/supabase/me', async (c) => {
 
 app.post('/api/v1/auth/register', async (c) => {
   const parsed = registerSchema.safeParse(await c.req.json().catch(() => null)); if (!parsed.success) return c.json({ error: 'validation_error', message: 'Revisa los datos enviados.', fields: parsed.error.flatten().fieldErrors }, 422);
-  const input = parsed.data; const db = getDb(c.env); const email = input.email.trim().toLowerCase(); const username = input.username.trim().toLowerCase();
+  const input = parsed.data; const db = getDb(c.env); const email = input.email.trim().toLowerCase(); const username = input.username.trim().toLowerCase(); const documentHash = await hashToken(input.documentNumber.trim().toUpperCase().replace(/[^A-Z0-9]/g, ''));
   const duplicate = await db.select({ id: users.id, email: users.email, username: users.username }).from(users).where(sql`${users.email} = ${email} OR ${users.username} = ${username}`).limit(1);
   if (duplicate.length) return c.json({ error: 'account_exists', message: duplicate[0].email === email ? 'Ese correo ya estÃ¡ registrado.' : 'Ese nombre de usuario no estÃ¡ disponible.' }, 409);
+  const documentInUse = await db.select({ userId: profiles.userId }).from(profiles).where(eq(profiles.registrationDocumentHash, documentHash)).limit(1);
+  if (documentInUse.length) return c.json({ error: 'document_exists', message: input.documentType === 'dpi' ? 'Ese DPI ya está registrado.' : 'Ese número de pasaporte ya está registrado.' }, 409);
   const passwordHash = await hashPassword(input.password);
-  const result = await db.transaction(async (tx) => { const [user] = await tx.insert(users).values({ email, username, passwordHash }).returning(); const [profile] = await tx.insert(profiles).values({ userId: user.id, fullName: input.fullName.trim(), visitorType: input.visitorType, nationality: input.nationality, countryCode: input.countryCode?.toUpperCase(), preferredLanguage: input.preferredLanguage }).returning(); return { user, profile }; });
+  const result = await db.transaction(async (tx) => {
+    const [user] = await tx.insert(users).values({ email, username, passwordHash }).returning();
+    const [profile] = await tx.insert(profiles).values({
+      userId: user.id,
+      fullName: input.fullName.trim(),
+      visitorType: input.visitorType,
+      nationality: input.nationality,
+      countryCode: input.countryCode?.toUpperCase(),
+      birthDate: input.birthDate,
+      registrationDocumentType: input.documentType,
+      registrationDocumentHash: documentHash,
+      preferredLanguage: input.preferredLanguage,
+    }).returning();
+    return { user, profile };
+  });
   const verificationToken = randomToken(); await db.insert(authTokens).values({ userId: result.user.id, type: 'verify_email', tokenHash: await hashToken(verificationToken), expiresAt: new Date(Date.now() + 86400000) });
   const session = await issueSession(c.env, result.user.id, input.deviceName);
   return c.json({ ...session, user: publicUser(result.user, result.profile), ...(c.env.APP_ENV === 'development' ? { debugEmailVerificationToken: verificationToken } : {}) }, 201);
@@ -145,7 +177,13 @@ app.get('/api/v1/media/documentos/:key{.+}', requireAuth, async (c) => {
 app.get('/api/v1/destinations', async (c) => { const db = getDb(c.env); const department = c.req.query('department'); const rows = await db.select().from(destinations).where(department ? and(eq(destinations.isActive, true), eq(destinations.department, department)) : eq(destinations.isActive, true)).orderBy(destinations.name); return c.json({ data: rows }); });
 app.get('/api/v1/destinations/:id', async (c) => { const [row] = await getDb(c.env).select().from(destinations).where(and(eq(destinations.id, c.req.param('id')), eq(destinations.isActive, true))).limit(1); return row ? c.json({ destination: row }) : c.json({ error: 'not_found', message: 'Destino no encontrado.' }, 404); });
 
-app.get('/api/v1/posts', async (c) => { const limit = Math.min(Number(c.req.query('limit') ?? 20), 50); const rows = await getDb(c.env).select({ post: posts, username: users.username, fullName: profiles.fullName, avatarKey: profiles.avatarKey }).from(posts).innerJoin(users, eq(posts.userId, users.id)).innerJoin(profiles, eq(posts.userId, profiles.userId)).where(eq(posts.status, 'published')).orderBy(desc(posts.createdAt)).limit(limit); return c.json({ data: rows }); });
+app.get('/api/v1/posts', async (c) => {
+  const limit = Math.min(Number(c.req.query('limit') ?? 20), 50);
+  const db = getDb(c.env);
+  const rows = await db.select({ post: posts, username: users.username, fullName: profiles.fullName, avatarKey: profiles.avatarKey }).from(posts).innerJoin(users, eq(posts.userId, users.id)).innerJoin(profiles, eq(posts.userId, profiles.userId)).where(eq(posts.status, 'published')).orderBy(desc(posts.createdAt)).limit(limit);
+  const data = await Promise.all(rows.map(async (row) => ({ ...row, media: await db.select({ objectKey: postMedia.objectKey, mediaType: postMedia.mediaType, position: postMedia.position }).from(postMedia).where(eq(postMedia.postId, row.post.id)).orderBy(postMedia.position) })));
+  return c.json({ data });
+});
 app.post('/api/v1/posts', requireAuth, async (c) => { const parsed = z.object({ caption: z.string().min(1).max(800), destinationId: z.string().uuid().optional(), visibility: z.enum(['public', 'followers', 'private']).default('public'), mediaKeys: z.array(z.string().min(1)).min(1).max(10) }).safeParse(await c.req.json().catch(() => null)); if (!parsed.success) return c.json({ error: 'validation_error', fields: parsed.error.flatten().fieldErrors }, 422); const db = getDb(c.env); const post = await db.transaction(async (tx) => { const [created] = await tx.insert(posts).values({ userId: c.get('userId'), caption: parsed.data.caption, destinationId: parsed.data.destinationId, visibility: parsed.data.visibility }).returning(); await tx.insert(postMedia).values(parsed.data.mediaKeys.map((objectKey, position) => ({ postId: created.id, objectKey, position }))); return created; }); return c.json({ post }, 201); });
 app.post('/api/v1/posts/:id/like', requireAuth, async (c) => { const db = getDb(c.env); const inserted = await db.insert(postLikes).values({ postId: c.req.param('id'), userId: c.get('userId') }).onConflictDoNothing().returning(); if (inserted.length) await db.update(posts).set({ likeCount: sql`${posts.likeCount} + 1`, updatedAt: new Date() }).where(eq(posts.id, c.req.param('id'))); return c.json({ liked: true }); });
 app.delete('/api/v1/posts/:id/like', requireAuth, async (c) => { const db = getDb(c.env); const deleted = await db.delete(postLikes).where(and(eq(postLikes.postId, c.req.param('id')), eq(postLikes.userId, c.get('userId')))).returning(); if (deleted.length) await db.update(posts).set({ likeCount: sql`greatest(${posts.likeCount} - 1, 0)`, updatedAt: new Date() }).where(eq(posts.id, c.req.param('id'))); return c.body(null, 204); });

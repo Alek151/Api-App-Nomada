@@ -24,14 +24,16 @@ export const profiles = pgTable('profiles', {
   nationality: varchar('nationality', { length: 80 }),
   countryCode: varchar('country_code', { length: 2 }),
   city: varchar('city', { length: 100 }),
-  birthDate: timestamp('birth_date', { mode: 'date' }),
+    birthDate: timestamp('birth_date', { mode: 'date' }),
+    registrationDocumentType: varchar('registration_document_type', { length: 24 }),
+    registrationDocumentHash: varchar('registration_document_hash', { length: 64 }),
   preferredLanguage: varchar('preferred_language', { length: 8 }).default('es').notNull(),
   bio: varchar('bio', { length: 240 }),
   avatarKey: text('avatar_key'),
   verificationStatus: varchar('verification_status', { length: 24 }).default('unverified').notNull(),
   profileVisibility: varchar('profile_visibility', { length: 16 }).default('public').notNull(),
   ...audit,
-});
+  }, (t) => [uniqueIndex('profiles_registration_document_uq').on(t.registrationDocumentHash)]);
 
 export const sessions = pgTable('sessions', {
   id: uuid('id').primaryKey().defaultRandom(),
