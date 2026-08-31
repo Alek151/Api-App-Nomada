@@ -8,6 +8,7 @@ import { verifyAuth } from '@supabase/server/core';
 import { getDb } from './db/client';
 import { authTokens, comments, destinations, identityVerifications, postLikes, postMedia, posts, profiles, sessions, stamps, userStamps, users, visits } from './db/schema';
 import { openApiJson, swaggerHtml } from './docs';
+import { infoHtml } from './info';
 import { createAccessToken, hashPassword, hashToken, randomToken, verifyAccessToken, verifyPassword } from './lib/security';
 import { buildMediaTarget, bucketFor, isOwnedDocument, ownedPrivateObject } from './lib/media';
 import { requireAuth } from './middleware/auth';
@@ -33,6 +34,7 @@ async function issueSession(env: Env, userId: string, deviceName?: string) {
 }
 
 app.get('/', (c) => c.json({ service: 'NÃ³mada API', status: 'ok', version: 'v1' }));
+app.get('/info', (c) => c.html(infoHtml()));
 app.get('/api/v1/health', async (c) => { try { await getDb(c.env).execute(sql`select 1`); return c.json({ status: 'healthy', database: 'connected', timestamp: new Date().toISOString() }); } catch { return c.json({ status: 'degraded', database: 'unavailable', timestamp: new Date().toISOString() }, 503); } });
 app.get('/api/v1/openapi.json', openApiJson);
 app.get('/api/v1/docs', (c) => c.html(swaggerHtml()));
