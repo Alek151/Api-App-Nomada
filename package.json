@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "node --env-file=.env.supabase scripts/dev.mjs",
     "dev:local": "wrangler dev --ip=0.0.0.0 --port=8787 --show-interactive-dev-session=false",
+    "build": "tsc --noEmit",
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
