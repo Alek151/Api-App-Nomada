@@ -7,7 +7,7 @@
 		"nodejs_compat"
 	],
 	"vars": {
-		"APP_ENV": "development",
+		"APP_ENV": "production",
 		"ALLOWED_ORIGINS": "*",
 		"ACCESS_TOKEN_TTL_MINUTES": "15",
 		"REFRESH_TOKEN_TTL_DAYS": "30",

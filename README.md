@@ -14,6 +14,15 @@ API móvil de **Nómada · Explora Guatemala**, diseñada para Cloudflare Worker
 - Swagger UI en `/api/v1/docs` y especificación OpenAPI en `/api/v1/openapi.json`.
 - 18 tablas PostgreSQL, migración inicial y datos semilla.
 
+## Estructura del código
+
+- `src/index.ts`: arranque del Worker, middleware y registro de rutas.
+- `src/docs.ts` y `src/openapi.ts`: Swagger UI y spec OpenAPI.
+- `src/db/`: acceso a datos y esquema Drizzle.
+- `src/lib/`: seguridad, medios y utilidades compartidas.
+- `src/middleware/`: autenticación.
+- `src/routes/README.md`: mapa funcional de los grupos de rutas.
+
 ## Desarrollo local
 
 Requisitos: Node `22.13+`, PostgreSQL y una base llamada `nomada`.
@@ -37,6 +46,12 @@ EXPO_PUBLIC_API_URL=http://IP-DE-TU-PC:8787/api/v1
 ```
 
 En un teléfono físico, `localhost` apunta al teléfono; usa la IP LAN de la computadora.
+
+La URL pública de producción del Worker es:
+
+```text
+https://api-nomada.innovasoftgt.com/api/v1
+```
 
 ## Cloudflare
 
