@@ -2,15 +2,19 @@ import type { Env } from '../types';
 
 export type MediaKind = 'profile' | 'post' | 'visit' | 'identity';
 
-const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const allowedImageTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const allowedPostVideoTypes = new Set(['video/mp4', 'video/quicktime']);
 const extensionFor: Record<string, string> = {
   'image/jpeg': 'jpg',
   'image/png': 'png',
   'image/webp': 'webp',
+  'video/mp4': 'mp4',
+  'video/quicktime': 'mov',
 };
 
 export function buildMediaTarget(kind: MediaKind, userId: string, contentType: string, slot?: string) {
-  if (!allowedTypes.has(contentType)) throw new Error('unsupported_media');
+  const isVideo = allowedPostVideoTypes.has(contentType);
+  if ((!allowedImageTypes.has(contentType) && !isVideo) || (isVideo && kind !== 'post')) throw new Error('unsupported_media');
   const extension = extensionFor[contentType];
   const id = crypto.randomUUID();
   if (kind === 'profile') return { bucket: 'photos' as const, key: `perfil/${userId}/${id}.${extension}`, visibility: 'public' as const };

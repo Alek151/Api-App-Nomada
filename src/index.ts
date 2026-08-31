@@ -134,7 +134,8 @@ app.post('/api/v1/media', requireAuth, async (c) => {
   if (!parsed.success) return c.json({ error: 'validation_error', message: 'Tipo de archivo no vÃ¡lido.' }, 422);
   const contentType = c.req.header('Content-Type')?.split(';')[0].trim().toLowerCase() ?? '';
   const bytes = await c.req.arrayBuffer();
-  if (!bytes.byteLength || bytes.byteLength > 10 * 1024 * 1024) return c.json({ error: 'invalid_size', message: 'La imagen debe pesar entre 1 byte y 10 MB.' }, 413);
+  const maxBytes = contentType.startsWith('video/') ? 20 * 1024 * 1024 : 10 * 1024 * 1024;
+  if (!bytes.byteLength || bytes.byteLength > maxBytes) return c.json({ error: 'invalid_size', message: contentType.startsWith('video/') ? 'El video no puede superar 20 MB.' : 'La imagen debe pesar entre 1 byte y 10 MB.' }, 413);
   try {
     const target = buildMediaTarget(parsed.data.kind, c.get('userId'), contentType, parsed.data.slot);
     await bucketFor(c.env, target.bucket).put(target.key, bytes, {
@@ -143,7 +144,7 @@ app.post('/api/v1/media', requireAuth, async (c) => {
     });
     return c.json({ bucket: target.bucket, objectKey: target.key, visibility: target.visibility }, 201);
   } catch {
-    return c.json({ error: 'unsupported_media', message: 'Solo se permiten imÃ¡genes JPEG, PNG o WebP.' }, 415);
+    return c.json({ error: 'unsupported_media', message: 'Solo se permiten imágenes JPEG, PNG, WebP o videos MP4/MOV para publicaciones.' }, 415);
   }
 });
 
@@ -181,7 +182,7 @@ app.get('/api/v1/posts', async (c) => {
   const data = await Promise.all(rows.map(async (row) => ({ ...row, media: await db.select({ objectKey: postMedia.objectKey, mediaType: postMedia.mediaType, position: postMedia.position }).from(postMedia).where(eq(postMedia.postId, row.post.id)).orderBy(postMedia.position) })));
   return c.json({ data });
 });
-app.post('/api/v1/posts', requireAuth, async (c) => { const parsed = z.object({ caption: z.string().min(1).max(800), destinationId: z.string().uuid().optional(), visibility: z.enum(['public', 'followers', 'private']).default('public'), mediaKeys: z.array(z.string().min(1)).min(1).max(10) }).safeParse(await c.req.json().catch(() => null)); if (!parsed.success) return c.json({ error: 'validation_error', fields: parsed.error.flatten().fieldErrors }, 422); const db = getDb(c.env); const post = await db.transaction(async (tx) => { const [created] = await tx.insert(posts).values({ userId: c.get('userId'), caption: parsed.data.caption, destinationId: parsed.data.destinationId, visibility: parsed.data.visibility }).returning(); await tx.insert(postMedia).values(parsed.data.mediaKeys.map((objectKey, position) => ({ postId: created.id, objectKey, position }))); return created; }); return c.json({ post }, 201); });
+app.post('/api/v1/posts', requireAuth, async (c) => { const parsed = z.object({ caption: z.string().min(1).max(800), destinationId: z.string().uuid().optional(), visibility: z.enum(['public', 'followers', 'private']).default('public'), mediaKeys: z.array(z.string().min(1)).min(1).max(10), mediaTypes: z.array(z.enum(['image', 'video'])).max(10).optional() }).safeParse(await c.req.json().catch(() => null)); if (!parsed.success) return c.json({ error: 'validation_error', fields: parsed.error.flatten().fieldErrors }, 422); const db = getDb(c.env); const post = await db.transaction(async (tx) => { const [created] = await tx.insert(posts).values({ userId: c.get('userId'), caption: parsed.data.caption, destinationId: parsed.data.destinationId, visibility: parsed.data.visibility }).returning(); await tx.insert(postMedia).values(parsed.data.mediaKeys.map((objectKey, position) => ({ postId: created.id, objectKey, mediaType: parsed.data.mediaTypes?.[position] ?? 'image', position }))); return created; }); return c.json({ post }, 201); });
 app.post('/api/v1/posts/:id/like', requireAuth, async (c) => { const db = getDb(c.env); const inserted = await db.insert(postLikes).values({ postId: c.req.param('id'), userId: c.get('userId') }).onConflictDoNothing().returning(); if (inserted.length) await db.update(posts).set({ likeCount: sql`${posts.likeCount} + 1`, updatedAt: new Date() }).where(eq(posts.id, c.req.param('id'))); return c.json({ liked: true }); });
 app.delete('/api/v1/posts/:id/like', requireAuth, async (c) => { const db = getDb(c.env); const deleted = await db.delete(postLikes).where(and(eq(postLikes.postId, c.req.param('id')), eq(postLikes.userId, c.get('userId')))).returning(); if (deleted.length) await db.update(posts).set({ likeCount: sql`greatest(${posts.likeCount} - 1, 0)`, updatedAt: new Date() }).where(eq(posts.id, c.req.param('id'))); return c.body(null, 204); });
 app.post('/api/v1/posts/:id/comments', requireAuth, async (c) => { const parsed = z.object({ body: z.string().min(1).max(500) }).safeParse(await c.req.json().catch(() => null)); if (!parsed.success) return c.json({ error: 'validation_error', message: 'El comentario no es vÃ¡lido.' }, 422); const db = getDb(c.env); const [comment] = await db.insert(comments).values({ postId: c.req.param('id'), userId: c.get('userId'), body: parsed.data.body }).returning(); await db.update(posts).set({ commentCount: sql`${posts.commentCount} + 1`, updatedAt: new Date() }).where(eq(posts.id, c.req.param('id'))); return c.json({ comment }, 201); });
