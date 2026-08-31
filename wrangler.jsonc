@@ -1,0 +1,39 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "nomada-api",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-08-30",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"vars": {
+		"APP_ENV": "development",
+		"ALLOWED_ORIGINS": "*",
+		"ACCESS_TOKEN_TTL_MINUTES": "15",
+		"REFRESH_TOKEN_TTL_DAYS": "30",
+		"SUPABASE_URL": "https://zfznqylkwoyfpsvbkida.supabase.co",
+		"SUPABASE_PUBLISHABLE_KEY": "sb_publishable_qiazw61Maow-28zUTY1GjQ_3FKj9QXk",
+		"SUPABASE_JWKS_URL": "https://zfznqylkwoyfpsvbkida.supabase.co/auth/v1/.well-known/jwks.json"
+	},
+	"hyperdrive": [
+		{
+			"binding": "HYPERDRIVE",
+			"id": "8756453164c4488dafaeda752e5263f4"
+		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "FOTOS",
+			"bucket_name": "nomada-fotos-usuarios",
+			"preview_bucket_name": "nomada-fotos-usuarios"
+		},
+		{
+			"binding": "DOCUMENTOS",
+			"bucket_name": "nomada-documentos",
+			"preview_bucket_name": "nomada-documentos"
+		}
+	],
+	"observability": {
+		"enabled": true
+	}
+}

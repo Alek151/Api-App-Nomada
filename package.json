@@ -1,0 +1,29 @@
+{
+  "name": "nomada-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file=.env.supabase scripts/dev.mjs",
+    "dev:local": "wrangler dev --ip=0.0.0.0 --port=8787 --show-interactive-dev-session=false",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio"
+  },
+  "dependencies": {
+    "@supabase/server": "^1.4.1",
+    "drizzle-orm": "latest",
+    "hono": "latest",
+    "jose": "latest",
+    "postgres": "latest",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "latest",
+    "drizzle-kit": "latest",
+    "typescript": "latest",
+    "wrangler": "latest"
+  }
+}
