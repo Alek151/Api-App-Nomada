@@ -29,7 +29,7 @@ const registerSchema = z.object({
   countryCode: z.string().length(2).optional(),
   preferredLanguage: z.enum(['es', 'en']).default('es'),
   deviceName: z.string().max(120).optional(),
-  birthDate: z.coerce.date().max(new Date()),
+  birthDate: z.coerce.date(),
   documentType: z.enum(['dpi', 'passport']).optional(),
   documentNumber: z.string().min(4).max(40),
 });
