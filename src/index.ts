@@ -292,23 +292,23 @@ const adminVerificationPatchSchema = z.object({ status: z.enum(['approved', 'rej
 
 app.get('/api/v1/admin/overview', requireAuth, requireAdmin, async (c) => {
   const range = adminDateRange(c); if (!range) return c.json({ error: 'invalid_date_range', message: 'El rango puede abarcar hasta 366 días.' }, 422);
-  const db = getDb(c.env);
+  const db = getDb(c.env); const visitRange = sql`${visits.visitedAt} between ${range.from.toISOString()}::timestamptz and ${range.to.toISOString()}::timestamptz`;
   const [totalUsers, activeUsers, totalVisits, verifiedVisits, totalPosts, publishedDestinations, pendingVerifications] = await Promise.all([
     db.select({ value: sql<number>`count(*)::int` }).from(users),
     db.select({ value: sql<number>`count(*)::int` }).from(users).where(eq(users.status, 'active')),
     db.select({ value: sql<number>`count(*)::int` }).from(visits),
-    db.select({ value: sql<number>`count(*)::int` }).from(visits).where(and(eq(visits.status, 'verified'), gt(visits.visitedAt, range.from))),
+    db.select({ value: sql<number>`count(*)::int` }).from(visits).where(and(eq(visits.status, 'verified'), visitRange)),
     db.select({ value: sql<number>`count(*)::int` }).from(posts),
     db.select({ value: sql<number>`count(*)::int` }).from(destinations).where(and(eq(destinations.contentStatus, 'published'), eq(destinations.isActive, true))),
     db.select({ value: sql<number>`count(*)::int` }).from(identityVerifications).where(eq(identityVerifications.status, 'pending')),
   ]);
-  const topDestinations = await db.select({ id: destinations.id, name: destinations.name, department: destinations.department, visitCount: sql<number>`count(${visits.id})::int` }).from(destinations).leftJoin(visits, and(eq(visits.destinationId, destinations.id), eq(visits.status, 'verified'), gt(visits.visitedAt, range.from))).groupBy(destinations.id).orderBy(desc(sql`count(${visits.id})`)).limit(6);
+  const topDestinations = await db.select({ id: destinations.id, name: destinations.name, department: destinations.department, visitCount: sql<number>`count(${visits.id})::int` }).from(destinations).leftJoin(visits, and(eq(visits.destinationId, destinations.id), eq(visits.status, 'verified'), visitRange)).groupBy(destinations.id).orderBy(desc(sql`count(${visits.id})`)).limit(6);
   const activity = await db.execute(sql<{ day: string; users: number; visits: number }>`
     select day::text, coalesce(sum(new_users), 0)::int as users, coalesce(sum(new_visits), 0)::int as visits
     from (
-      select date_trunc('day', created_at) as day, count(*)::int as new_users, 0::int as new_visits from users where created_at between ${range.from} and ${range.to} group by 1
+      select date_trunc('day', created_at) as day, count(*)::int as new_users, 0::int as new_visits from users where created_at between ${range.from.toISOString()}::timestamptz and ${range.to.toISOString()}::timestamptz group by 1
       union all
-      select date_trunc('day', visited_at) as day, 0::int as new_users, count(*)::int as new_visits from visits where status = 'verified' and visited_at between ${range.from} and ${range.to} group by 1
+      select date_trunc('day', visited_at) as day, 0::int as new_users, count(*)::int as new_visits from visits where status = 'verified' and visited_at between ${range.from.toISOString()}::timestamptz and ${range.to.toISOString()}::timestamptz group by 1
     ) series group by day order by day asc
   `);
   return c.json({ range: { from: range.from.toISOString(), to: range.to.toISOString() }, metrics: { totalUsers: totalUsers[0]?.value ?? 0, activeUsers: activeUsers[0]?.value ?? 0, totalVisits: totalVisits[0]?.value ?? 0, visitsInRange: verifiedVisits[0]?.value ?? 0, totalPosts: totalPosts[0]?.value ?? 0, publishedDestinations: publishedDestinations[0]?.value ?? 0, pendingVerifications: pendingVerifications[0]?.value ?? 0 }, topDestinations, activity });
@@ -318,7 +318,7 @@ app.get('/api/v1/admin/analytics/visit-map', requireAuth, requireAdmin, async (c
   const range = adminDateRange(c, 366); if (!range) return c.json({ error: 'invalid_date_range', message: 'El rango puede abarcar hasta 366 días.' }, 422);
   const grid = await getDb(c.env).execute(sql<{ latitude: number; longitude: number; visitCount: number }>`
     select round(latitude::numeric, 3)::float8 as latitude, round(longitude::numeric, 3)::float8 as longitude, count(*)::int as "visitCount"
-    from visits where status = 'verified' and visited_at between ${range.from} and ${range.to}
+    from visits where status = 'verified' and visited_at between ${range.from.toISOString()}::timestamptz and ${range.to.toISOString()}::timestamptz
     group by 1, 2 order by "visitCount" desc limit 1000
   `);
   return c.json({ aggregation: 'grid_3_decimals', range: { from: range.from.toISOString(), to: range.to.toISOString() }, data: grid });
@@ -344,7 +344,8 @@ app.get('/api/v1/admin/users/:id/visits', requireAuth, requireAdmin, async (c) =
   const range = adminDateRange(c, 366); if (!range) return c.json({ error: 'invalid_date_range', message: 'El rango puede abarcar hasta 366 días.' }, 422);
   const db = getDb(c.env); const [user] = await db.select({ id: users.id, email: users.email, username: users.username, fullName: profiles.fullName }).from(users).innerJoin(profiles, eq(profiles.userId, users.id)).where(eq(users.id, c.req.param('id'))).limit(1);
   if (!user) return c.json({ error: 'not_found', message: 'Usuario no encontrado.' }, 404);
-  const data = await db.select({ id: visits.id, latitude: visits.latitude, longitude: visits.longitude, accuracyMeters: visits.accuracyMeters, distanceMeters: visits.distanceMeters, visitedAt: visits.visitedAt, destinationName: destinations.name, department: destinations.department }).from(visits).innerJoin(destinations, eq(destinations.id, visits.destinationId)).where(and(eq(visits.userId, user.id), eq(visits.status, 'verified'), gt(visits.visitedAt, range.from))).orderBy(desc(visits.visitedAt)).limit(500);
+  const visitRange = sql`${visits.visitedAt} between ${range.from.toISOString()}::timestamptz and ${range.to.toISOString()}::timestamptz`;
+  const data = await db.select({ id: visits.id, latitude: visits.latitude, longitude: visits.longitude, accuracyMeters: visits.accuracyMeters, distanceMeters: visits.distanceMeters, visitedAt: visits.visitedAt, destinationName: destinations.name, department: destinations.department }).from(visits).innerJoin(destinations, eq(destinations.id, visits.destinationId)).where(and(eq(visits.userId, user.id), eq(visits.status, 'verified'), visitRange)).orderBy(desc(visits.visitedAt)).limit(500);
   await auditAdminAction(c, 'user.visit_locations.viewed', 'user', user.id, { from: range.from.toISOString(), to: range.to.toISOString(), resultCount: data.length });
   return c.json({ user, data });
 });
