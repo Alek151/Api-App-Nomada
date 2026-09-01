@@ -22,6 +22,41 @@
       "when": 1788220000000,
       "tag": "0002_post_locations",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1788300000000,
+      "tag": "0003_destination_catalog",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1788301000000,
+      "tag": "0004_reconcile_seed_destinations",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1788302000000,
+      "tag": "0005_visit_validation_100m",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1788303000000,
+      "tag": "0006_social_interactions",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1788304000000,
+      "tag": "0007_achievements_and_recognitions",
+      "breakpoints": true
     }
   ]
 }

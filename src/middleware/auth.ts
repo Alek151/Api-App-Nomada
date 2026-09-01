@@ -1,7 +1,7 @@
 import { and, eq, gt, isNull } from 'drizzle-orm';
 import { createMiddleware } from 'hono/factory';
 import { getDb } from '../db/client';
-import { sessions } from '../db/schema';
+import { sessions, users } from '../db/schema';
 import { verifyAccessToken } from '../lib/security';
 import type { AppVariables, Env } from '../types';
 
@@ -18,4 +18,11 @@ export const requireAuth = createMiddleware<{ Bindings: Env; Variables: AppVaria
   } catch {
     return c.json({ error: 'invalid_token', message: 'La sesión no es válida o expiró.' }, 401);
   }
+});
+
+// Debe usarse después de requireAuth. El rol nunca llega desde el cliente.
+export const requireAdmin = createMiddleware<{ Bindings: Env; Variables: AppVariables }>(async (c, next) => {
+  const [user] = await getDb(c.env).select({ role: users.role, status: users.status }).from(users).where(eq(users.id, c.get('userId'))).limit(1);
+  if (!user || user.status !== 'active' || user.role !== 'admin') return c.json({ error: 'forbidden', message: 'Esta acción requiere un rol de administrador.' }, 403);
+  await next();
 });
