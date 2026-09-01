@@ -6,7 +6,7 @@ import { secureHeaders } from 'hono/secure-headers';
 import { z } from 'zod';
 import { verifyAuth } from '@supabase/server/core';
 import { getDb } from './db/client';
-import { authTokens, badges, commentLikes, comments, destinationPhotos, destinations, identityVerifications, postLikes, postMedia, posts, profiles, recognitions, savedPosts, sessions, stamps, userBadges, userRecognitions, userStamps, users, visits } from './db/schema';
+import { authTokens, badges, commentLikes, comments, destinationPhotos, destinations, identityVerifications, postLikes, postMedia, posts, profiles, recognitions, routeStops, routes, savedPosts, sessions, stamps, userBadges, userRecognitions, userStamps, users, visits } from './db/schema';
 import { openApiJson, swaggerHtml } from './docs';
 import { infoHtml } from './info';
 import { createAccessToken, hashPassword, hashToken, randomToken, verifyAccessToken, verifyPassword } from './lib/security';
@@ -208,6 +208,19 @@ app.get('/api/v1/destinations', async (c) => {
 app.get('/api/v1/destinations/:id', async (c) => {
   const [row] = await getDb(c.env).select().from(destinations).where(and(eq(destinations.id, c.req.param('id')), eq(destinations.isActive, true), eq(destinations.contentStatus, 'published'))).limit(1);
   return row ? c.json({ destination: await destinationWithDetails(getDb(c.env), row) }) : c.json({ error: 'not_found', message: 'Destino no encontrado.' }, 404);
+});
+
+async function routeWithStops(db: ReturnType<typeof getDb>, route: typeof routes.$inferSelect) {
+  const stops = await db.select({ position: routeStops.position, destination: destinations }).from(routeStops).innerJoin(destinations, eq(routeStops.destinationId, destinations.id)).where(eq(routeStops.routeId, route.id)).orderBy(asc(routeStops.position));
+  return { ...route, stops: await Promise.all(stops.map(async (stop) => ({ position: stop.position, destination: await destinationWithDetails(db, stop.destination) }))) };
+}
+app.get('/api/v1/routes', async (c) => {
+  const db = getDb(c.env); const routeRows = await db.select().from(routes).where(eq(routes.isActive, true)).orderBy(asc(routes.name));
+  return c.json({ data: await Promise.all(routeRows.map((route) => routeWithStops(db, route))) });
+});
+app.get('/api/v1/routes/:slug', async (c) => {
+  const db = getDb(c.env); const [route] = await db.select().from(routes).where(and(eq(routes.slug, c.req.param('slug')), eq(routes.isActive, true))).limit(1);
+  return route ? c.json({ route: await routeWithStops(db, route) }) : c.json({ error: 'not_found', message: 'Ruta no encontrada.' }, 404);
 });
 
 app.get('/api/v1/admin/destinations', requireAuth, requireAdmin, async (c) => {

@@ -57,6 +57,13 @@
       "when": 1788304000000,
       "tag": "0007_achievements_and_recognitions",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1788382800000,
+      "tag": "0008_cultural_routes_and_museums",
+      "breakpoints": true
     }
   ]
 }
