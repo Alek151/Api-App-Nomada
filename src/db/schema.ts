@@ -97,3 +97,13 @@ export const comments = pgTable('comments', { id: uuid('id').primaryKey().defaul
 export const commentLikes = pgTable('comment_likes', { commentId: uuid('comment_id').notNull().references(() => comments.id, { onDelete: 'cascade' }), userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }), createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull() }, (t) => [primaryKey({ columns: [t.commentId, t.userId] })]);
 export const savedPosts = pgTable('saved_posts', { postId: uuid('post_id').notNull().references(() => posts.id, { onDelete: 'cascade' }), userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }), createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull() }, (t) => [primaryKey({ columns: [t.postId, t.userId] }), index('saved_posts_user_idx').on(t.userId)]);
 export const follows = pgTable('follows', { followerId: uuid('follower_id').notNull().references(() => users.id, { onDelete: 'cascade' }), followingId: uuid('following_id').notNull().references(() => users.id, { onDelete: 'cascade' }), status: varchar('status', { length: 16 }).default('accepted').notNull(), createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull() }, (t) => [primaryKey({ columns: [t.followerId, t.followingId] })]);
+
+export const adminAuditLogs = pgTable('admin_audit_logs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  actorUserId: uuid('actor_user_id').notNull().references(() => users.id, { onDelete: 'restrict' }),
+  action: varchar('action', { length: 80 }).notNull(),
+  resourceType: varchar('resource_type', { length: 80 }).notNull(),
+  resourceId: varchar('resource_id', { length: 160 }),
+  metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => [index('admin_audit_logs_actor_idx').on(t.actorUserId, t.createdAt), index('admin_audit_logs_resource_idx').on(t.resourceType, t.resourceId, t.createdAt)]);

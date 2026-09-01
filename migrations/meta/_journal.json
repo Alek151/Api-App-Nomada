@@ -64,6 +64,13 @@
       "when": 1788382800000,
       "tag": "0008_cultural_routes_and_museums",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1788400000000,
+      "tag": "0009_admin_portal",
+      "breakpoints": true
     }
   ]
 }

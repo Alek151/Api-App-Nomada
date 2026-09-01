@@ -6,7 +6,7 @@ import { secureHeaders } from 'hono/secure-headers';
 import { z } from 'zod';
 import { verifyAuth } from '@supabase/server/core';
 import { getDb } from './db/client';
-import { authTokens, badges, commentLikes, comments, destinationPhotos, destinations, identityVerifications, postLikes, postMedia, posts, profiles, recognitions, routeStops, routes, savedPosts, sessions, stamps, userBadges, userRecognitions, userStamps, users, visits } from './db/schema';
+import { adminAuditLogs, authTokens, badges, commentLikes, comments, destinationPhotos, destinations, identityVerifications, postLikes, postMedia, posts, profiles, recognitions, routeStops, routes, savedPosts, sessions, stamps, userBadges, userRecognitions, userStamps, users, visits } from './db/schema';
 import { openApiJson, swaggerHtml } from './docs';
 import { infoHtml } from './info';
 import { createAccessToken, hashPassword, hashToken, randomToken, verifyAccessToken, verifyPassword } from './lib/security';
@@ -61,6 +61,20 @@ async function issueSession(env: Env, userId: string, deviceName?: string) {
   const [session] = await db.insert(sessions).values({ userId, refreshTokenHash, deviceName, expiresAt }).returning();
   const accessToken = await createAccessToken(env.JWT_SECRET, userId, session.id, Number(env.ACCESS_TOKEN_TTL_MINUTES || 15));
   return { accessToken, refreshToken, expiresIn: Number(env.ACCESS_TOKEN_TTL_MINUTES || 15) * 60 };
+}
+
+async function auditAdminAction(c: { env: Env; get: (key: 'userId') => string }, action: string, resourceType: string, resourceId?: string, metadata: Record<string, unknown> = {}) {
+  await getDb(c.env).insert(adminAuditLogs).values({ actorUserId: c.get('userId'), action, resourceType, resourceId, metadata });
+}
+
+function adminDateRange(c: { req: { query: (key: string) => string | undefined } }, maxDays = 366) {
+  const now = new Date();
+  const requestedFrom = c.req.query('from'); const requestedTo = c.req.query('to');
+  const from = requestedFrom ? new Date(`${requestedFrom}T00:00:00.000Z`) : new Date(now.getTime() - 29 * 86400000);
+  const to = requestedTo ? new Date(`${requestedTo}T23:59:59.999Z`) : now;
+  const earliest = new Date(now.getTime() - maxDays * 86400000);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from > to || from < earliest) return null;
+  return { from, to };
 }
 
 app.get('/', (c) => c.json({ service: 'NÃ³mada API', status: 'ok', version: 'v1' }));
@@ -271,6 +285,98 @@ app.get('/api/v1/admin/recognitions', requireAuth, requireAdmin, async (c) => c.
 app.post('/api/v1/admin/recognitions', requireAuth, requireAdmin, async (c) => { const parsed = recognitionAdminSchema.safeParse(await c.req.json().catch(() => null)); if (!parsed.success) return c.json({ error: 'validation_error', fields: parsed.error.flatten().fieldErrors }, 422); const [recognition] = await getDb(c.env).insert(recognitions).values(parsed.data).returning(); return c.json({ recognition }, 201); });
 app.patch('/api/v1/admin/recognitions/:id', requireAuth, requireAdmin, async (c) => { const parsed = recognitionAdminSchema.partial().safeParse(await c.req.json().catch(() => null)); if (!parsed.success) return c.json({ error: 'validation_error', fields: parsed.error.flatten().fieldErrors }, 422); const [recognition] = await getDb(c.env).update(recognitions).set({ ...parsed.data, updatedAt: new Date() }).where(eq(recognitions.id, c.req.param('id'))).returning(); return recognition ? c.json({ recognition }) : c.json({ error: 'not_found', message: 'Reconocimiento no encontrado.' }, 404); });
 app.post('/api/v1/admin/users/:userId/recognitions/:recognitionId', requireAuth, requireAdmin, async (c) => { const notes = z.object({ notes: z.string().max(1000).optional() }).safeParse(await c.req.json().catch(() => ({}))); await getDb(c.env).insert(userRecognitions).values({ userId: c.req.param('userId'), recognitionId: c.req.param('recognitionId'), notes: notes.success ? notes.data.notes : undefined }).onConflictDoNothing(); return c.json({ assigned: true }, 201); });
+
+const adminUserPatchSchema = z.object({ role: z.enum(['traveler', 'admin']).optional(), status: z.enum(['active', 'suspended']).optional() }).refine((value) => value.role !== undefined || value.status !== undefined);
+const adminPostPatchSchema = z.object({ status: z.enum(['published', 'hidden', 'review']) });
+const adminVerificationPatchSchema = z.object({ status: z.enum(['approved', 'rejected']), reviewerNotes: z.string().max(4000).nullable().optional() });
+
+app.get('/api/v1/admin/overview', requireAuth, requireAdmin, async (c) => {
+  const range = adminDateRange(c); if (!range) return c.json({ error: 'invalid_date_range', message: 'El rango puede abarcar hasta 366 días.' }, 422);
+  const db = getDb(c.env);
+  const [totalUsers, activeUsers, totalVisits, verifiedVisits, totalPosts, publishedDestinations, pendingVerifications] = await Promise.all([
+    db.select({ value: sql<number>`count(*)::int` }).from(users),
+    db.select({ value: sql<number>`count(*)::int` }).from(users).where(eq(users.status, 'active')),
+    db.select({ value: sql<number>`count(*)::int` }).from(visits),
+    db.select({ value: sql<number>`count(*)::int` }).from(visits).where(and(eq(visits.status, 'verified'), gt(visits.visitedAt, range.from))),
+    db.select({ value: sql<number>`count(*)::int` }).from(posts),
+    db.select({ value: sql<number>`count(*)::int` }).from(destinations).where(and(eq(destinations.contentStatus, 'published'), eq(destinations.isActive, true))),
+    db.select({ value: sql<number>`count(*)::int` }).from(identityVerifications).where(eq(identityVerifications.status, 'pending')),
+  ]);
+  const topDestinations = await db.select({ id: destinations.id, name: destinations.name, department: destinations.department, visitCount: sql<number>`count(${visits.id})::int` }).from(destinations).leftJoin(visits, and(eq(visits.destinationId, destinations.id), eq(visits.status, 'verified'), gt(visits.visitedAt, range.from))).groupBy(destinations.id).orderBy(desc(sql`count(${visits.id})`)).limit(6);
+  const activity = await db.execute(sql<{ day: string; users: number; visits: number }>`
+    select day::text, coalesce(sum(new_users), 0)::int as users, coalesce(sum(new_visits), 0)::int as visits
+    from (
+      select date_trunc('day', created_at) as day, count(*)::int as new_users, 0::int as new_visits from users where created_at between ${range.from} and ${range.to} group by 1
+      union all
+      select date_trunc('day', visited_at) as day, 0::int as new_users, count(*)::int as new_visits from visits where status = 'verified' and visited_at between ${range.from} and ${range.to} group by 1
+    ) series group by day order by day asc
+  `);
+  return c.json({ range: { from: range.from.toISOString(), to: range.to.toISOString() }, metrics: { totalUsers: totalUsers[0]?.value ?? 0, activeUsers: activeUsers[0]?.value ?? 0, totalVisits: totalVisits[0]?.value ?? 0, visitsInRange: verifiedVisits[0]?.value ?? 0, totalPosts: totalPosts[0]?.value ?? 0, publishedDestinations: publishedDestinations[0]?.value ?? 0, pendingVerifications: pendingVerifications[0]?.value ?? 0 }, topDestinations, activity });
+});
+
+app.get('/api/v1/admin/analytics/visit-map', requireAuth, requireAdmin, async (c) => {
+  const range = adminDateRange(c, 366); if (!range) return c.json({ error: 'invalid_date_range', message: 'El rango puede abarcar hasta 366 días.' }, 422);
+  const grid = await getDb(c.env).execute(sql<{ latitude: number; longitude: number; visitCount: number }>`
+    select round(latitude::numeric, 3)::float8 as latitude, round(longitude::numeric, 3)::float8 as longitude, count(*)::int as "visitCount"
+    from visits where status = 'verified' and visited_at between ${range.from} and ${range.to}
+    group by 1, 2 order by "visitCount" desc limit 1000
+  `);
+  return c.json({ aggregation: 'grid_3_decimals', range: { from: range.from.toISOString(), to: range.to.toISOString() }, data: grid });
+});
+
+app.get('/api/v1/admin/users', requireAuth, requireAdmin, async (c) => {
+  const query = (c.req.query('q') ?? '').trim().slice(0, 80); const status = c.req.query('status'); const db = getDb(c.env);
+  const filters = [status === 'active' || status === 'suspended' ? eq(users.status, status) : undefined, query ? sql`(${users.email} ilike ${`%${query}%`} or ${users.username} ilike ${`%${query}%`} or ${profiles.fullName} ilike ${`%${query}%`})` : undefined].filter(Boolean) as any[];
+  const rows = await db.select({ id: users.id, email: users.email, username: users.username, role: users.role, status: users.status, emailVerifiedAt: users.emailVerifiedAt, lastLoginAt: users.lastLoginAt, createdAt: users.createdAt, fullName: profiles.fullName, visitorType: profiles.visitorType, nationality: profiles.nationality, city: profiles.city, verificationStatus: profiles.verificationStatus, visitCount: sql<number>`count(${visits.id})::int` }).from(users).innerJoin(profiles, eq(profiles.userId, users.id)).leftJoin(visits, and(eq(visits.userId, users.id), eq(visits.status, 'verified'))).where(filters.length ? and(...filters) : undefined).groupBy(users.id, profiles.userId).orderBy(desc(users.createdAt)).limit(100);
+  return c.json({ data: rows });
+});
+
+app.patch('/api/v1/admin/users/:id', requireAuth, requireAdmin, async (c) => {
+  const parsed = adminUserPatchSchema.safeParse(await c.req.json().catch(() => null)); if (!parsed.success) return c.json({ error: 'validation_error', fields: parsed.error.flatten().fieldErrors }, 422);
+  if (c.req.param('id') === c.get('userId')) return c.json({ error: 'self_update_forbidden', message: 'No puedes cambiar tu propio rol o estado desde administración.' }, 422);
+  const [updated] = await getDb(c.env).update(users).set({ ...parsed.data, updatedAt: new Date() }).where(eq(users.id, c.req.param('id'))).returning();
+  if (!updated) return c.json({ error: 'not_found', message: 'Usuario no encontrado.' }, 404);
+  await auditAdminAction(c, 'user.updated', 'user', updated.id, parsed.data);
+  return c.json({ user: publicUser(updated) });
+});
+
+app.get('/api/v1/admin/users/:id/visits', requireAuth, requireAdmin, async (c) => {
+  const range = adminDateRange(c, 366); if (!range) return c.json({ error: 'invalid_date_range', message: 'El rango puede abarcar hasta 366 días.' }, 422);
+  const db = getDb(c.env); const [user] = await db.select({ id: users.id, email: users.email, username: users.username, fullName: profiles.fullName }).from(users).innerJoin(profiles, eq(profiles.userId, users.id)).where(eq(users.id, c.req.param('id'))).limit(1);
+  if (!user) return c.json({ error: 'not_found', message: 'Usuario no encontrado.' }, 404);
+  const data = await db.select({ id: visits.id, latitude: visits.latitude, longitude: visits.longitude, accuracyMeters: visits.accuracyMeters, distanceMeters: visits.distanceMeters, visitedAt: visits.visitedAt, destinationName: destinations.name, department: destinations.department }).from(visits).innerJoin(destinations, eq(destinations.id, visits.destinationId)).where(and(eq(visits.userId, user.id), eq(visits.status, 'verified'), gt(visits.visitedAt, range.from))).orderBy(desc(visits.visitedAt)).limit(500);
+  await auditAdminAction(c, 'user.visit_locations.viewed', 'user', user.id, { from: range.from.toISOString(), to: range.to.toISOString(), resultCount: data.length });
+  return c.json({ user, data });
+});
+
+app.get('/api/v1/admin/posts', requireAuth, requireAdmin, async (c) => {
+  const status = c.req.query('status'); const predicate = status === 'published' || status === 'hidden' || status === 'review' ? eq(posts.status, status) : undefined;
+  const rows = await getDb(c.env).select({ post: posts, username: users.username, fullName: profiles.fullName }).from(posts).innerJoin(users, eq(users.id, posts.userId)).innerJoin(profiles, eq(profiles.userId, users.id)).where(predicate).orderBy(desc(posts.createdAt)).limit(100);
+  return c.json({ data: rows });
+});
+
+app.patch('/api/v1/admin/posts/:id', requireAuth, requireAdmin, async (c) => {
+  const parsed = adminPostPatchSchema.safeParse(await c.req.json().catch(() => null)); if (!parsed.success) return c.json({ error: 'validation_error', fields: parsed.error.flatten().fieldErrors }, 422);
+  const [post] = await getDb(c.env).update(posts).set({ status: parsed.data.status, updatedAt: new Date() }).where(eq(posts.id, c.req.param('id'))).returning();
+  if (!post) return c.json({ error: 'not_found', message: 'Publicación no encontrada.' }, 404);
+  await auditAdminAction(c, 'post.moderated', 'post', post.id, parsed.data);
+  return c.json({ post });
+});
+
+app.get('/api/v1/admin/verifications', requireAuth, requireAdmin, async (c) => {
+  const status = c.req.query('status'); const predicate = status === 'pending' || status === 'approved' || status === 'rejected' ? eq(identityVerifications.status, status) : undefined;
+  const rows = await getDb(c.env).select({ verification: identityVerifications, email: users.email, username: users.username, fullName: profiles.fullName }).from(identityVerifications).innerJoin(users, eq(users.id, identityVerifications.userId)).innerJoin(profiles, eq(profiles.userId, users.id)).where(predicate).orderBy(desc(identityVerifications.createdAt)).limit(100);
+  return c.json({ data: rows });
+});
+
+app.patch('/api/v1/admin/verifications/:id', requireAuth, requireAdmin, async (c) => {
+  const parsed = adminVerificationPatchSchema.safeParse(await c.req.json().catch(() => null)); if (!parsed.success) return c.json({ error: 'validation_error', fields: parsed.error.flatten().fieldErrors }, 422);
+  const db = getDb(c.env); const [record] = await db.update(identityVerifications).set({ status: parsed.data.status, reviewerNotes: parsed.data.reviewerNotes ?? null, reviewedAt: new Date(), updatedAt: new Date() }).where(eq(identityVerifications.id, c.req.param('id'))).returning();
+  if (!record) return c.json({ error: 'not_found', message: 'Solicitud no encontrada.' }, 404);
+  await db.update(profiles).set({ verificationStatus: parsed.data.status === 'approved' ? 'verified' : 'rejected', updatedAt: new Date() }).where(eq(profiles.userId, record.userId));
+  await auditAdminAction(c, 'identity_verification.reviewed', 'identity_verification', record.id, parsed.data);
+  return c.json({ verification: record });
+});
 
 app.get('/api/v1/posts', async (c) => {
   const limit = Math.min(Number(c.req.query('limit') ?? 20), 50);
