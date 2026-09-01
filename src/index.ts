@@ -39,7 +39,7 @@ const destinationBaseSchema = z.object({
 });
 const destinationSchema = destinationBaseSchema.superRefine((value, ctx) => { if (value.averageCostMin !== null && value.averageCostMax !== null && value.averageCostMin !== undefined && value.averageCostMax !== undefined && value.averageCostMin > value.averageCostMax) ctx.addIssue({ code: 'custom', path: ['averageCostMax'], message: 'El costo máximo debe ser mayor o igual al mínimo.' }); });
 const destinationPatchSchema = destinationBaseSchema.partial().extend({ humanVerified: z.boolean().optional(), verificationNotes: z.string().max(4000).nullable().optional(), stamp: destinationBaseSchema.shape.stamp.partial().optional() });
-const destinationPhotoSchema = z.object({ objectKey: z.string().min(1).max(500), caption: z.string().max(240).nullable().optional(), position: z.number().int().min(0).max(100).default(0), isPrimary: z.boolean().default(false) });
+const destinationPhotoSchema = z.object({ objectKey: z.string().min(1).max(500), caption: z.string().max(240).nullable().optional(), source: z.literal('nomada_library').default('nomada_library'), credit: z.string().max(140).nullable().optional(), position: z.number().int().min(0).max(100).default(0), isPrimary: z.boolean().default(false) });
 
 function publicUser(user: typeof users.$inferSelect, profile?: typeof profiles.$inferSelect) {
   return { id: user.id, email: user.email, username: user.username, role: user.role, status: user.status, emailVerified: !!user.emailVerifiedAt, profile: profile ? { fullName: profile.fullName, visitorType: profile.visitorType, nationality: profile.nationality, countryCode: profile.countryCode, city: profile.city, bio: profile.bio, avatarKey: profile.avatarKey, verificationStatus: profile.verificationStatus, profileVisibility: profile.profileVisibility } : undefined };
@@ -47,7 +47,7 @@ function publicUser(user: typeof users.$inferSelect, profile?: typeof profiles.$
 
 function publicDestination(destination: typeof destinations.$inferSelect, stamp?: typeof stamps.$inferSelect, photos: (typeof destinationPhotos.$inferSelect)[] = []) {
   const { humanVerifiedAt, humanVerifiedBy, verificationNotes, sourceUrl, contentStatus, isActive, ...safeDestination } = destination;
-  return { ...safeDestination, stamp: stamp ? { id: stamp.id, code: stamp.code, name: stamp.name, description: stamp.description, artworkKey: stamp.artworkKey, color: stamp.color } : null, photos: photos.map(({ id, objectKey, caption, position, isPrimary }) => ({ id, objectKey, caption, position, isPrimary })) };
+  return { ...safeDestination, stamp: stamp ? { id: stamp.id, code: stamp.code, name: stamp.name, description: stamp.description, artworkKey: stamp.artworkKey, color: stamp.color } : null, photos: photos.map(({ id, objectKey, caption, source, credit, position, isPrimary }) => ({ id, objectKey, caption, source, credit, position, isPrimary })) };
 }
 
 async function destinationWithDetails(db: ReturnType<typeof getDb>, destination: typeof destinations.$inferSelect, admin = false) {
@@ -65,6 +65,16 @@ async function issueSession(env: Env, userId: string, deviceName?: string) {
 
 async function auditAdminAction(c: { env: Env; get: (key: 'userId') => string }, action: string, resourceType: string, resourceId?: string, metadata: Record<string, unknown> = {}) {
   await getDb(c.env).insert(adminAuditLogs).values({ actorUserId: c.get('userId'), action, resourceType, resourceId, metadata });
+}
+
+async function r2PrefixUsage(bucket: R2Bucket, prefix: string) {
+  let cursor: string | undefined; let bytes = 0; let files = 0; let truncated = false;
+  do {
+    const page = await bucket.list({ prefix, cursor, limit: 1000 });
+    files += page.objects.length; bytes += page.objects.reduce((total, object) => total + object.size, 0);
+    cursor = page.truncated ? page.cursor : undefined; truncated ||= page.truncated;
+  } while (cursor);
+  return { files, bytes, truncated };
 }
 
 function adminDateRange(c: { req: { query: (key: string) => string | undefined } }, maxDays = 366) {
@@ -181,10 +191,18 @@ app.post('/api/v1/media', requireAuth, async (c) => {
 
 app.post('/api/v1/admin/media', requireAuth, requireAdmin, async (c) => {
   const contentType = c.req.header('Content-Type')?.split(';')[0].trim().toLowerCase() ?? '';
-  const extensions: Record<string, string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
-  const extension = extensions[contentType]; if (!extension) return c.json({ error: 'unsupported_media', message: 'Solo se permiten imágenes JPEG, PNG o WebP.' }, 415);
-  const bytes = await c.req.arrayBuffer(); if (!bytes.byteLength || bytes.byteLength > 10 * 1024 * 1024) return c.json({ error: 'invalid_size', message: 'La imagen debe pesar hasta 10 MB.' }, 413);
-  const requestedKind = c.req.query('kind'); const scope = requestedKind === 'stamp' ? 'sellos' : requestedKind === 'badge' ? 'insignias' : requestedKind === 'recognition' ? 'reconocimientos' : 'destinos'; const objectKey = `${scope}/${crypto.randomUUID()}.${extension}`;
+  const requestedKind = c.req.query('kind');
+  const extensions: Record<string, string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/svg+xml': 'svg' };
+  const extension = extensions[contentType];
+  const svgAllowed = requestedKind === 'stamp' || requestedKind === 'badge' || requestedKind === 'recognition';
+  if (!extension || (contentType === 'image/svg+xml' && !svgAllowed)) return c.json({ error: 'unsupported_media', message: 'Usa JPEG, PNG o WebP. SVG solo está permitido para sellos, insignias y reconocimientos.' }, 415);
+  const bytes = await c.req.arrayBuffer(); const maxBytes = contentType === 'image/svg+xml' ? 1024 * 1024 : 10 * 1024 * 1024;
+  if (!bytes.byteLength || bytes.byteLength > maxBytes) return c.json({ error: 'invalid_size', message: contentType === 'image/svg+xml' ? 'El SVG debe pesar hasta 1 MB.' : 'La imagen debe pesar hasta 10 MB.' }, 413);
+  if (contentType === 'image/svg+xml') {
+    const svg = new TextDecoder().decode(bytes).toLowerCase();
+    if (!svg.includes('<svg') || /<script|<foreignobject|<iframe|\son[a-z]+\s*=|javascript:|<object|<embed/.test(svg)) return c.json({ error: 'unsafe_svg', message: 'El SVG contiene elementos no permitidos.' }, 422);
+  }
+  const scope = requestedKind === 'stamp' ? 'sellos' : requestedKind === 'badge' ? 'insignias' : requestedKind === 'recognition' ? 'reconocimientos' : 'destinos'; const objectKey = `${scope}/${crypto.randomUUID()}.${extension}`;
   await c.env.FOTOS.put(objectKey, bytes, { httpMetadata: { contentType }, customMetadata: { ownerId: c.get('userId'), visibility: 'public', kind: scope } });
   return c.json({ bucket: 'photos', objectKey, visibility: 'public' }, 201);
 });
@@ -241,6 +259,12 @@ app.get('/api/v1/admin/destinations', requireAuth, requireAdmin, async (c) => {
   const db = getDb(c.env); const rows = await db.select().from(destinations).orderBy(destinations.name);
   return c.json({ data: await Promise.all(rows.map((row) => destinationWithDetails(db, row, true))) });
 });
+app.get('/api/v1/admin/destinations/:id', requireAuth, requireAdmin, async (c) => {
+  const db = getDb(c.env); const [destination] = await db.select().from(destinations).where(eq(destinations.id, c.req.param('id'))).limit(1);
+  if (!destination) return c.json({ error: 'not_found', message: 'Destino no encontrado.' }, 404);
+  await auditAdminAction(c, 'destination.viewed', 'destination', destination.id);
+  return c.json(await destinationWithDetails(db, destination, true));
+});
 app.post('/api/v1/admin/destinations', requireAuth, requireAdmin, async (c) => {
   const parsed = destinationSchema.safeParse(await c.req.json().catch(() => null)); if (!parsed.success) return c.json({ error: 'validation_error', fields: parsed.error.flatten().fieldErrors }, 422);
   const input = parsed.data; const db = getDb(c.env);
@@ -261,17 +285,20 @@ app.patch('/api/v1/admin/destinations/:id', requireAuth, requireAdmin, async (c)
     if (stampInput && Object.keys(stampInput).length) await tx.update(stamps).set({ ...stampInput, updatedAt: new Date() }).where(eq(stamps.destinationId, existing.id));
   });
   const [updated] = await db.select().from(destinations).where(eq(destinations.id, existing.id)).limit(1);
+  await auditAdminAction(c, 'destination.updated', 'destination', existing.id, { fields: Object.keys(parsed.data) });
   return c.json(await destinationWithDetails(db, updated, true));
 });
 app.post('/api/v1/admin/destinations/:id/photos', requireAuth, requireAdmin, async (c) => {
   const [destination] = await getDb(c.env).select({ id: destinations.id }).from(destinations).where(eq(destinations.id, c.req.param('id'))).limit(1); if (!destination) return c.json({ error: 'not_found', message: 'Destino no encontrado.' }, 404);
   const parsed = destinationPhotoSchema.safeParse(await c.req.json().catch(() => null)); if (!parsed.success) return c.json({ error: 'validation_error', fields: parsed.error.flatten().fieldErrors }, 422);
   const object = await c.env.FOTOS.head(parsed.data.objectKey); if (!object || object.customMetadata?.visibility !== 'public') return c.json({ error: 'invalid_media', message: 'La foto debe existir en el bucket público.' }, 422);
-  const db = getDb(c.env); const [photo] = await db.transaction(async (tx) => { if (parsed.data.isPrimary) await tx.update(destinationPhotos).set({ isPrimary: false, updatedAt: new Date() }).where(eq(destinationPhotos.destinationId, destination.id)); const [created] = await tx.insert(destinationPhotos).values({ destinationId: destination.id, ...parsed.data, caption: parsed.data.caption ?? null }).returning(); if (parsed.data.isPrimary) await tx.update(destinations).set({ coverKey: created.objectKey, updatedAt: new Date() }).where(eq(destinations.id, destination.id)); return [created]; });
+  const db = getDb(c.env); const [photo] = await db.transaction(async (tx) => { if (parsed.data.isPrimary) await tx.update(destinationPhotos).set({ isPrimary: false, updatedAt: new Date() }).where(eq(destinationPhotos.destinationId, destination.id)); const [created] = await tx.insert(destinationPhotos).values({ destinationId: destination.id, ...parsed.data, caption: parsed.data.caption ?? null, credit: parsed.data.credit ?? 'Nómada Fotos Library' }).returning(); if (parsed.data.isPrimary) await tx.update(destinations).set({ coverKey: created.objectKey, updatedAt: new Date() }).where(eq(destinations.id, destination.id)); return [created]; });
+  await auditAdminAction(c, 'destination.photo.added', 'destination', destination.id, { photoId: photo.id, source: photo.source });
   return c.json({ photo }, 201);
 });
 app.delete('/api/v1/admin/destinations/:destinationId/photos/:photoId', requireAuth, requireAdmin, async (c) => {
   const db = getDb(c.env); const [photo] = await db.delete(destinationPhotos).where(and(eq(destinationPhotos.id, c.req.param('photoId')), eq(destinationPhotos.destinationId, c.req.param('destinationId')))).returning();
+  if (photo) await auditAdminAction(c, 'destination.photo.unlinked', 'destination', c.req.param('destinationId'), { photoId: photo.id });
   return photo ? c.json({ deleted: true }) : c.json({ error: 'not_found', message: 'Foto no encontrada.' }, 404);
 });
 
@@ -331,6 +358,28 @@ app.get('/api/v1/admin/users', requireAuth, requireAdmin, async (c) => {
   return c.json({ data: rows });
 });
 
+app.get('/api/v1/admin/users/:id', requireAuth, requireAdmin, async (c) => {
+  const db = getDb(c.env); const userId = c.req.param('id');
+  const [account] = await db.select({
+    id: users.id, email: users.email, username: users.username, role: users.role, status: users.status, emailVerifiedAt: users.emailVerifiedAt, lastLoginAt: users.lastLoginAt, createdAt: users.createdAt,
+    profile: { fullName: profiles.fullName, visitorType: profiles.visitorType, nationality: profiles.nationality, countryCode: profiles.countryCode, city: profiles.city, birthDate: profiles.birthDate, preferredLanguage: profiles.preferredLanguage, bio: profiles.bio, avatarKey: profiles.avatarKey, verificationStatus: profiles.verificationStatus, profileVisibility: profiles.profileVisibility },
+  }).from(users).innerJoin(profiles, eq(profiles.userId, users.id)).where(eq(users.id, userId)).limit(1);
+  if (!account) return c.json({ error: 'not_found', message: 'Usuario no encontrado.' }, 404);
+  const [visitCount, postCount] = await Promise.all([
+    db.select({ value: sql<number>`count(*)::int` }).from(visits).where(and(eq(visits.userId, userId), eq(visits.status, 'verified'))),
+    db.select({ value: sql<number>`count(*)::int` }).from(posts).where(eq(posts.userId, userId)),
+  ]);
+  const postRows = await db.select({ post: posts }).from(posts).where(eq(posts.userId, userId)).orderBy(desc(posts.createdAt)).limit(100);
+  const userPosts = await Promise.all(postRows.map(async ({ post }) => ({ ...post, media: await db.select({ id: postMedia.id, objectKey: postMedia.objectKey, mediaType: postMedia.mediaType, position: postMedia.position, width: postMedia.width, height: postMedia.height }).from(postMedia).where(eq(postMedia.postId, post.id)).orderBy(asc(postMedia.position)) })));
+  const verificationRows = await db.select({ id: identityVerifications.id, documentType: identityVerifications.documentType, status: identityVerifications.status, reviewerNotes: identityVerifications.reviewerNotes, reviewedAt: identityVerifications.reviewedAt, createdAt: identityVerifications.createdAt, hasBack: sql<boolean>`${identityVerifications.documentBackKey} is not null`, hasSelfie: sql<boolean>`${identityVerifications.selfieKey} is not null` }).from(identityVerifications).where(eq(identityVerifications.userId, userId)).orderBy(desc(identityVerifications.createdAt));
+  const [profileUsage, postUsage, visitUsage, documentUsage] = await Promise.all([
+    r2PrefixUsage(c.env.FOTOS, `perfil/${userId}/`), r2PrefixUsage(c.env.FOTOS, `publicaciones/${userId}/`), r2PrefixUsage(c.env.FOTOS, `visitas/${userId}/`), r2PrefixUsage(c.env.DOCUMENTOS, `certificaciones/${userId}/`),
+  ]);
+  const storage = { profile: profileUsage, publications: postUsage, visitEvidence: visitUsage, identityDocuments: documentUsage, totalBytes: profileUsage.bytes + postUsage.bytes + visitUsage.bytes + documentUsage.bytes, totalFiles: profileUsage.files + postUsage.files + visitUsage.files + documentUsage.files };
+  await auditAdminAction(c, 'user.profile.viewed', 'user', userId, { posts: userPosts.length, verifications: verificationRows.length, storageFiles: storage.totalFiles });
+  return c.json({ user: account, metrics: { verifiedVisits: visitCount[0]?.value ?? 0, posts: postCount[0]?.value ?? 0 }, posts: userPosts, verifications: verificationRows, storage });
+});
+
 app.patch('/api/v1/admin/users/:id', requireAuth, requireAdmin, async (c) => {
   const parsed = adminUserPatchSchema.safeParse(await c.req.json().catch(() => null)); if (!parsed.success) return c.json({ error: 'validation_error', fields: parsed.error.flatten().fieldErrors }, 422);
   if (c.req.param('id') === c.get('userId')) return c.json({ error: 'self_update_forbidden', message: 'No puedes cambiar tu propio rol o estado desde administración.' }, 422);
@@ -366,8 +415,22 @@ app.patch('/api/v1/admin/posts/:id', requireAuth, requireAdmin, async (c) => {
 
 app.get('/api/v1/admin/verifications', requireAuth, requireAdmin, async (c) => {
   const status = c.req.query('status'); const predicate = status === 'pending' || status === 'approved' || status === 'rejected' ? eq(identityVerifications.status, status) : undefined;
-  const rows = await getDb(c.env).select({ verification: identityVerifications, email: users.email, username: users.username, fullName: profiles.fullName }).from(identityVerifications).innerJoin(users, eq(users.id, identityVerifications.userId)).innerJoin(profiles, eq(profiles.userId, users.id)).where(predicate).orderBy(desc(identityVerifications.createdAt)).limit(100);
+  const rows = await getDb(c.env).select({ verification: { id: identityVerifications.id, userId: identityVerifications.userId, documentType: identityVerifications.documentType, status: identityVerifications.status, reviewerNotes: identityVerifications.reviewerNotes, reviewedAt: identityVerifications.reviewedAt, createdAt: identityVerifications.createdAt, hasBack: sql<boolean>`${identityVerifications.documentBackKey} is not null`, hasSelfie: sql<boolean>`${identityVerifications.selfieKey} is not null` }, email: users.email, username: users.username, fullName: profiles.fullName }).from(identityVerifications).innerJoin(users, eq(users.id, identityVerifications.userId)).innerJoin(profiles, eq(profiles.userId, users.id)).where(predicate).orderBy(desc(identityVerifications.createdAt)).limit(100);
   return c.json({ data: rows });
+});
+
+app.get('/api/v1/admin/verifications/:id/documents/:document', requireAuth, requireAdmin, async (c) => {
+  const document = c.req.param('document');
+  if (document !== 'front' && document !== 'back' && document !== 'selfie') return c.json({ error: 'validation_error', message: 'Tipo de evidencia no válido.' }, 422);
+  const [verification] = await getDb(c.env).select().from(identityVerifications).where(eq(identityVerifications.id, c.req.param('id'))).limit(1);
+  if (!verification) return c.json({ error: 'not_found', message: 'Solicitud no encontrada.' }, 404);
+  const key = document === 'front' ? verification.documentFrontKey : document === 'back' ? verification.documentBackKey : verification.selfieKey;
+  if (!key) return c.json({ error: 'not_found', message: 'Esta evidencia no fue enviada.' }, 404);
+  const object = await c.env.DOCUMENTOS.get(key);
+  if (!object) return c.json({ error: 'not_found', message: 'Archivo no encontrado.' }, 404);
+  await auditAdminAction(c, 'identity_verification.document.viewed', 'identity_verification', verification.id, { document });
+  const headers = new Headers(); object.writeHttpMetadata(headers); headers.set('Cache-Control', 'private, no-store'); headers.set('Content-Disposition', 'inline'); headers.set('X-Content-Type-Options', 'nosniff');
+  return new Response(object.body, { headers });
 });
 
 app.patch('/api/v1/admin/verifications/:id', requireAuth, requireAdmin, async (c) => {

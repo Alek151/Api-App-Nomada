@@ -60,7 +60,7 @@ export const destinations = pgTable('destinations', {
 }, (t) => [uniqueIndex('destinations_slug_uq').on(t.slug), index('destinations_department_idx').on(t.department)]);
 
 export const destinationPhotos = pgTable('destination_photos', {
-  id: uuid('id').primaryKey().defaultRandom(), destinationId: uuid('destination_id').notNull().references(() => destinations.id, { onDelete: 'cascade' }), objectKey: text('object_key').notNull(), caption: varchar('caption', { length: 240 }), position: integer('position').default(0).notNull(), isPrimary: boolean('is_primary').default(false).notNull(), ...audit,
+  id: uuid('id').primaryKey().defaultRandom(), destinationId: uuid('destination_id').notNull().references(() => destinations.id, { onDelete: 'cascade' }), objectKey: text('object_key').notNull(), caption: varchar('caption', { length: 240 }), source: varchar('source', { length: 24 }).default('nomada_library').notNull(), credit: varchar('credit', { length: 140 }), position: integer('position').default(0).notNull(), isPrimary: boolean('is_primary').default(false).notNull(), ...audit,
 }, (t) => [index('destination_photos_destination_idx').on(t.destinationId), uniqueIndex('destination_photos_position_uq').on(t.destinationId, t.position)]);
 
 export const routes = pgTable('routes', {
