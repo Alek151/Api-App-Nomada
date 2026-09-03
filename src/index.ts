@@ -16,7 +16,9 @@ import type { AppVariables, Env } from './types';
 
 const app = new Hono<{ Bindings: Env; Variables: AppVariables }>();
 app.use('*', logger());
-app.use('*', secureHeaders());
+// Los medios públicos se sirven desde este dominio a las apps web de Nómada.
+// La ruta de medios define su propia política CORP; no la sobrescribimos aquí.
+app.use('*', secureHeaders({ crossOriginResourcePolicy: false }));
 app.use('/api/*', async (c, next) => cors({ origin: c.env.ALLOWED_ORIGINS === '*' ? '*' : c.env.ALLOWED_ORIGINS.split(',').map((x) => x.trim()), allowHeaders: ['Authorization', 'Content-Type'], allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'], maxAge: 86400 })(c, next));
 
 const registerSchema = z.object({
