@@ -220,7 +220,7 @@ app.get('/api/v1/media/fotos/:key{.+}', async (c) => {
       if (object.customMetadata?.ownerId !== userId) return c.json({ error: 'forbidden', message: 'No tienes acceso a este archivo.' }, 403);
     } catch { return c.json({ error: 'invalid_token', message: 'La sesiÃ³n no es vÃ¡lida.' }, 401); }
   }
-  const headers = new Headers(); object.writeHttpMetadata(headers); headers.set('etag', object.httpEtag); headers.set('Cache-Control', isPublic ? 'public, max-age=86400' : 'private, no-store');
+  const headers = new Headers(); object.writeHttpMetadata(headers); headers.set('etag', object.httpEtag); headers.set('Cache-Control', isPublic ? 'public, max-age=86400' : 'private, no-store'); headers.set('Cross-Origin-Resource-Policy', isPublic ? 'cross-origin' : 'same-origin');
   return new Response(object.body, { headers });
 });
 
@@ -451,7 +451,7 @@ app.patch('/api/v1/admin/verifications/:id', requireAuth, requireAdmin, async (c
 app.get('/api/v1/posts', async (c) => {
   const limit = Math.min(Number(c.req.query('limit') ?? 20), 50);
   const db = getDb(c.env);
-  const rows = await db.select({ post: posts, username: users.username, fullName: profiles.fullName, avatarKey: profiles.avatarKey }).from(posts).innerJoin(users, eq(posts.userId, users.id)).innerJoin(profiles, eq(posts.userId, profiles.userId)).where(and(eq(posts.status, 'published'), eq(posts.visibility, 'public'))).orderBy(desc(posts.createdAt)).limit(limit);
+  const rows = await db.select({ post: posts, username: users.username, fullName: profiles.fullName, avatarKey: profiles.avatarKey }).from(posts).innerJoin(users, eq(posts.userId, users.id)).innerJoin(profiles, eq(posts.userId, profiles.userId)).where(and(sql`${posts.status} in ('published', 'review')`, eq(posts.visibility, 'public'))).orderBy(desc(posts.createdAt)).limit(limit);
   const data = await Promise.all(rows.map(async (row) => ({ ...row, media: await db.select({ objectKey: postMedia.objectKey, mediaType: postMedia.mediaType, position: postMedia.position }).from(postMedia).where(eq(postMedia.postId, row.post.id)).orderBy(postMedia.position) })));
   return c.json({ data });
 });
