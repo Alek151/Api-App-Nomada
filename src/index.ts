@@ -402,7 +402,13 @@ app.get('/api/v1/admin/users/:id/visits', requireAuth, requireAdmin, async (c) =
 app.get('/api/v1/admin/posts', requireAuth, requireAdmin, async (c) => {
   const status = c.req.query('status'); const predicate = status === 'published' || status === 'hidden' || status === 'review' ? eq(posts.status, status) : undefined;
   const rows = await getDb(c.env).select({ post: posts, username: users.username, fullName: profiles.fullName }).from(posts).innerJoin(users, eq(users.id, posts.userId)).innerJoin(profiles, eq(profiles.userId, users.id)).where(predicate).orderBy(desc(posts.createdAt)).limit(100);
-  return c.json({ data: rows });
+  const db = getDb(c.env);
+  const data = await Promise.all(rows.map(async (row) => ({
+    ...row,
+    media: await db.select({ id: postMedia.id, objectKey: postMedia.objectKey, mediaType: postMedia.mediaType, position: postMedia.position, width: postMedia.width, height: postMedia.height })
+      .from(postMedia).where(eq(postMedia.postId, row.post.id)).orderBy(asc(postMedia.position)),
+  })));
+  return c.json({ data });
 });
 
 app.patch('/api/v1/admin/posts/:id', requireAuth, requireAdmin, async (c) => {
