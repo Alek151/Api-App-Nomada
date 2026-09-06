@@ -523,12 +523,19 @@ app.get('/api/v1/admin/overview', requireAuth, requireAdmin, async (c) => {
 
 app.get('/api/v1/admin/analytics/visit-map', requireAuth, requireAdmin, async (c) => {
   const range = adminDateRange(c, 366); if (!range) return c.json({ error: 'invalid_date_range', message: 'El rango puede abarcar hasta 366 días.' }, 422);
+  const pagination = readPagination(c, { limit: 250, max: 1000 });
+  const totalRows = await getDb(c.env).execute(sql<{ value: number }>`
+    select count(*)::int as value from (
+      select 1 from visits where status = 'verified' and visited_at between ${range.from.toISOString()}::timestamptz and ${range.to.toISOString()}::timestamptz
+      group by round(latitude::numeric, 3), round(longitude::numeric, 3)
+    ) points
+  `);
   const grid = await getDb(c.env).execute(sql<{ latitude: number; longitude: number; visitCount: number }>`
     select round(latitude::numeric, 3)::float8 as latitude, round(longitude::numeric, 3)::float8 as longitude, count(*)::int as "visitCount"
     from visits where status = 'verified' and visited_at between ${range.from.toISOString()}::timestamptz and ${range.to.toISOString()}::timestamptz
-    group by 1, 2 order by "visitCount" desc limit 1000
+    group by 1, 2 order by "visitCount" desc limit ${pagination.limit} offset ${pagination.offset}
   `);
-  return c.json({ aggregation: 'grid_3_decimals', range: { from: range.from.toISOString(), to: range.to.toISOString() }, data: grid });
+  return c.json({ aggregation: 'grid_3_decimals', range: { from: range.from.toISOString(), to: range.to.toISOString() }, data: grid, pagination: paginationMeta(totalRows[0]?.value ?? 0, pagination) });
 });
 
 app.get('/api/v1/admin/users', requireAuth, requireAdmin, async (c) => {
@@ -573,10 +580,10 @@ app.get('/api/v1/admin/users/:id/visits', requireAuth, requireAdmin, async (c) =
   const range = adminDateRange(c, 366); if (!range) return c.json({ error: 'invalid_date_range', message: 'El rango puede abarcar hasta 366 días.' }, 422);
   const db = getDb(c.env); const [user] = await db.select({ id: users.id, email: users.email, username: users.username, fullName: profiles.fullName }).from(users).innerJoin(profiles, eq(profiles.userId, users.id)).where(eq(users.id, c.req.param('id'))).limit(1);
   if (!user) return c.json({ error: 'not_found', message: 'Usuario no encontrado.' }, 404);
-  const visitRange = sql`${visits.visitedAt} between ${range.from.toISOString()}::timestamptz and ${range.to.toISOString()}::timestamptz`;
-  const data = await db.select({ id: visits.id, latitude: visits.latitude, longitude: visits.longitude, accuracyMeters: visits.accuracyMeters, distanceMeters: visits.distanceMeters, visitedAt: visits.visitedAt, destinationName: destinations.name, department: destinations.department }).from(visits).innerJoin(destinations, eq(destinations.id, visits.destinationId)).where(and(eq(visits.userId, user.id), eq(visits.status, 'verified'), visitRange)).orderBy(desc(visits.visitedAt)).limit(500);
+  const visitRange = sql`${visits.visitedAt} between ${range.from.toISOString()}::timestamptz and ${range.to.toISOString()}::timestamptz`; const predicate = and(eq(visits.userId, user.id), eq(visits.status, 'verified'), visitRange); const pagination = readPagination(c, { limit: 100, max: 500 });
+  const [countRows, data] = await Promise.all([db.select({ value: sql<number>`count(*)::int` }).from(visits).where(predicate), db.select({ id: visits.id, latitude: visits.latitude, longitude: visits.longitude, accuracyMeters: visits.accuracyMeters, distanceMeters: visits.distanceMeters, visitedAt: visits.visitedAt, destinationName: destinations.name, department: destinations.department }).from(visits).innerJoin(destinations, eq(destinations.id, visits.destinationId)).where(predicate).orderBy(desc(visits.visitedAt)).limit(pagination.limit).offset(pagination.offset)]);
   await auditAdminAction(c, 'user.visit_locations.viewed', 'user', user.id, { from: range.from.toISOString(), to: range.to.toISOString(), resultCount: data.length });
-  return c.json({ user, data });
+  return c.json({ user, data, pagination: paginationMeta(countRows[0]?.value ?? 0, pagination) });
 });
 
 app.get('/api/v1/admin/posts', requireAuth, requireAdmin, async (c) => {
