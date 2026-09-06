@@ -371,12 +371,6 @@ app.get('/api/v1/media/documentos/:key{.+}', requireAuth, async (c) => {
 });
 
 app.get('/api/v1/destinations', async (c) => {
-  // `CacheStorage` del DOM no declara `default`, pero el runtime de Workers sí.
-  const catalogCache = (caches as unknown as { default: Cache }).default;
-  const cacheUrl = new URL(c.req.url); cacheUrl.searchParams.set('__catalogVersion', '2');
-  const cacheKey = new Request(cacheUrl.toString(), { method: 'GET' });
-  const cached = await catalogCache.match(cacheKey);
-  if (cached) return cached;
   const db = getDb(c.env); const department = c.req.query('department'); const countryCode = c.req.query('country')?.trim().toUpperCase(); const view = c.req.query('view');
   const pagination = readPagination(c, view === 'map' ? { limit: 120, max: 250 } : { limit: 24, max: 100 });
   const conditions = [eq(destinations.isActive, true), eq(destinations.contentStatus, 'published')];
@@ -389,17 +383,17 @@ app.get('/api/v1/destinations', async (c) => {
   ]);
   // El catálogo es público y cambia desde Administración, no por cada visita.
   // Cloudflare puede responderlo desde el borde sin volver a PostgreSQL.
-  c.header('Cache-Control', 'public, max-age=300, s-maxage=21600, stale-while-revalidate=86400');
+  // Un pin recién publicado debe aparecer pronto en la app; no guardamos una respuesta
+  // antigua del catálogo dentro del Worker.
+  c.header('Cache-Control', 'public, max-age=60, s-maxage=60, stale-while-revalidate=0');
   if (view === 'map') {
     const ids = rows.map((row) => row.id);
     const stampRows = ids.length ? await db.select().from(stamps).where(inArray(stamps.destinationId, ids)) : [];
     const stampsByDestination = new Map(stampRows.filter((stamp) => !!stamp.destinationId).map((stamp) => [stamp.destinationId!, stamp]));
     const response = c.json({ data: rows.map((row) => publicDestinationMapSummary(row, stampsByDestination.get(row.id))), pagination: paginationMeta(countRows[0]?.value ?? 0, pagination) });
-    c.executionCtx.waitUntil(catalogCache.put(cacheKey, response.clone()));
     return response;
   }
   const response = c.json({ data: await Promise.all(rows.map((row) => destinationWithDetails(db, row))), pagination: paginationMeta(countRows[0]?.value ?? 0, pagination) });
-  c.executionCtx.waitUntil(catalogCache.put(cacheKey, response.clone()));
   return response;
 });
 app.get('/api/v1/destinations/countries', async (c) => {
@@ -410,7 +404,7 @@ app.get('/api/v1/destinations/countries', async (c) => {
     from destinations where is_active = true and content_status = 'published'
     group by country, country_code order by country asc
   `);
-  c.header('Cache-Control', 'public, max-age=300, s-maxage=21600, stale-while-revalidate=86400');
+  c.header('Cache-Control', 'public, max-age=60, s-maxage=60, stale-while-revalidate=0');
   return c.json({ data: Array.from(result) });
 });
 app.get('/api/v1/destinations/:id', async (c) => {
@@ -464,7 +458,9 @@ app.patch('/api/v1/admin/destinations/:id', requireAuth, requireAdmin, async (c)
   const { stamp: stampInput, humanVerified, verificationNotes, nomadaCertified, ...changes } = parsed.data; const db = getDb(c.env);
   const [existing] = await db.select().from(destinations).where(eq(destinations.id, c.req.param('id'))).limit(1); if (!existing) return c.json({ error: 'not_found', message: 'Destino no encontrado.' }, 404);
   await db.transaction(async (tx) => {
-    const destinationChanges = { ...changes, ...(changes.costCurrency ? { costCurrency: changes.costCurrency.toUpperCase() } : {}), ...(nomadaCertified === undefined ? {} : { nomadaCertifiedAt: nomadaCertified ? new Date() : null }), ...(humanVerified === undefined ? {} : { humanVerifiedAt: humanVerified ? new Date() : null, humanVerifiedBy: humanVerified ? c.get('userId') : null }), ...(verificationNotes === undefined ? {} : { verificationNotes }), updatedAt: new Date() };
+    // Guardar una ficha editorial la deja disponible, salvo que al crearla se haya pedido
+    // explícitamente conservarla como borrador.
+    const destinationChanges = { ...changes, contentStatus: changes.contentStatus ?? 'published', ...(changes.costCurrency ? { costCurrency: changes.costCurrency.toUpperCase() } : {}), ...(nomadaCertified === undefined ? {} : { nomadaCertifiedAt: nomadaCertified ? new Date() : null }), ...(humanVerified === undefined ? {} : { humanVerifiedAt: humanVerified ? new Date() : null, humanVerifiedBy: humanVerified ? c.get('userId') : null }), ...(verificationNotes === undefined ? {} : { verificationNotes }), updatedAt: new Date() };
     await tx.update(destinations).set(destinationChanges).where(eq(destinations.id, existing.id));
     if (stampInput && Object.keys(stampInput).length) await tx.update(stamps).set({ ...stampInput, updatedAt: new Date() }).where(eq(stamps.destinationId, existing.id));
   });
