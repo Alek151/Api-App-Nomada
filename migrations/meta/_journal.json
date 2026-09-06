@@ -169,6 +169,13 @@
       "when": 1788512000000,
       "tag": "0023_social_safety_notifications",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1788513000000,
+      "tag": "0024_traveler_connections",
+      "breakpoints": true
     }
   ]
 }
