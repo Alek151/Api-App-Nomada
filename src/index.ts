@@ -434,7 +434,11 @@ app.get('/api/v1/routes/:slug', async (c) => {
 
 app.get('/api/v1/admin/destinations', requireAuth, requireAdmin, async (c) => {
   const db = getDb(c.env); const pagination = readPagination(c, { limit: 25, max: 100 }); const query = (c.req.query('q') ?? '').trim().slice(0, 100); const countryCode = c.req.query('country')?.trim().toUpperCase();
-  const filters = [countryCode && /^[A-Z]{2}$/.test(countryCode) ? eq(destinations.countryCode, countryCode) : undefined, query ? sql`(${destinations.name} ilike ${`%${query}%`} or ${destinations.department} ilike ${`%${query}%`})` : undefined].filter(Boolean) as any[]; const predicate = filters.length ? and(...filters) : undefined;
+  // Administración consulta exactamente la misma tabla que alimenta los pines públicos.
+  const filters = [
+    countryCode && /^[A-Z]{2}$/.test(countryCode) ? eq(destinations.countryCode, countryCode) : undefined,
+    query ? sql`(${destinations.name} ilike ${`%${query}%`} or ${destinations.officialName} ilike ${`%${query}%`} or ${destinations.country} ilike ${`%${query}%`} or ${destinations.municipality} ilike ${`%${query}%`} or ${destinations.department} ilike ${`%${query}%`} or ${destinations.category} ilike ${`%${query}%`} or ${destinations.slug} ilike ${`%${query}%`})` : undefined,
+  ].filter(Boolean) as any[]; const predicate = filters.length ? and(...filters) : undefined;
   const [countRows, rows] = await Promise.all([db.select({ value: sql<number>`count(*)::int` }).from(destinations).where(predicate), db.select().from(destinations).where(predicate).orderBy(destinations.name).limit(pagination.limit).offset(pagination.offset)]);
   return c.json({ data: await Promise.all(rows.map((row) => destinationWithDetails(db, row, true))), pagination: paginationMeta(countRows[0]?.value ?? 0, pagination) });
 });
