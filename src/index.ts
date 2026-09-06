@@ -57,7 +57,7 @@ const businessInterestSchema = z.object({
   interest: z.enum(['visit_point', 'route_partner', 'offers', 'alliance']),
   message: z.string().trim().max(1500).optional().or(z.literal('')),
   consent: z.literal(true),
-  websiteTrap: z.string().max(0).optional(),
+  websiteTrap: z.string().max(200).optional(),
 });
 const businessInterestPatchSchema = z.object({
   status: z.enum(['new', 'contacted', 'qualified', 'discarded']).optional(),
@@ -71,7 +71,7 @@ const travelerInterestSchema = z.object({
   department: z.string().trim().max(100).optional().or(z.literal('')),
   travelerStyle: z.enum(['nature', 'culture', 'food', 'adventure', 'all']).optional(),
   consent: z.literal(true),
-  websiteTrap: z.string().max(0).optional(),
+  websiteTrap: z.string().max(200).optional(),
 });
 const travelerInterestPatchSchema = z.object({ status: z.enum(['new', 'contacted', 'qualified', 'discarded']), }).partial().refine((value) => value.status !== undefined, { message: 'Indica un estado para actualizar.' });
 
