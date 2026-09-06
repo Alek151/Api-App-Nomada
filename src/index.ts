@@ -1,5 +1,6 @@
 ﻿import { and, asc, desc, eq, gt, isNull, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
+import { inArray } from 'drizzle-orm';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { secureHeaders } from 'hono/secure-headers';
@@ -37,7 +38,7 @@ const registerSchema = z.object({
 });
 const loginSchema = z.object({ email: z.string().email(), password: z.string().min(1), deviceName: z.string().max(120).optional() });
 const destinationBaseSchema = z.object({
-  slug: z.string().min(3).max(120).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/), name: z.string().min(2).max(160), officialName: z.string().max(200).nullable().optional(), municipality: z.string().max(100).nullable().optional(), department: z.string().min(2).max(100), category: z.string().min(2).max(60), subcategory: z.string().max(100).nullable().optional(), description: z.string().min(10).max(4000), shortDescription: z.string().max(320).nullable().optional(), history: z.string().max(12000).nullable().optional(), historicalPeriod: z.string().max(160).nullable().optional(), approximateDate: z.string().max(160).nullable().optional(), unescoStatus: z.boolean().default(false), unescoType: z.string().max(40).nullable().optional(), latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180), validationRadiusMeters: z.number().int().min(100).max(100).default(100), activities: z.array(z.string().min(2).max(40)).max(12).default([]), visitDurationMinutes: z.number().int().min(5).max(1440).nullable().optional(), schedule: z.record(z.string(), z.unknown()).default({}), accessibility: z.record(z.string(), z.unknown()).default({}), visitorInfo: z.record(z.string(), z.unknown()).default({}), nomadaRecommendations: z.record(z.string(), z.unknown()).default({}), nomadaCertified: z.boolean().optional(), averageCostMin: z.number().int().min(0).max(100000).nullable().optional(), averageCostMax: z.number().int().min(0).max(100000).nullable().optional(), costCurrency: z.string().length(3).default('GTQ'), coverKey: z.string().max(500).nullable().optional(), sourceUrl: z.string().url().max(1000).nullable().optional(), contentStatus: z.enum(['draft', 'published', 'archived']).default('draft'), isActive: z.boolean().default(true), points: z.number().int().min(0).max(10000).default(100), stamp: z.object({ code: z.string().min(3).max(40), name: z.string().min(2).max(120), description: z.string().max(1000).nullable().optional(), artworkKey: z.string().max(500).nullable().optional(), color: z.string().regex(/^#[0-9A-Fa-f]{6}$/).nullable().optional(), isActive: z.boolean().default(true) }),
+  slug: z.string().min(3).max(120).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/), name: z.string().min(2).max(160), officialName: z.string().max(200).nullable().optional(), municipality: z.string().max(100).nullable().optional(), department: z.string().min(2).max(100), category: z.string().min(2).max(60), subcategory: z.string().max(100).nullable().optional(), description: z.string().min(10).max(4000), shortDescription: z.string().max(320).nullable().optional(), history: z.string().max(12000).nullable().optional(), historicalPeriod: z.string().max(160).nullable().optional(), approximateDate: z.string().max(160).nullable().optional(), unescoStatus: z.boolean().default(false), unescoType: z.string().max(40).nullable().optional(), websiteOfficial: z.string().url().max(1000).nullable().optional(), wikipediaUrl: z.string().url().max(1000).nullable().optional(), coordinatesSource: z.string().max(160).nullable().optional(), historySource: z.string().max(240).nullable().optional(), latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180), validationRadiusMeters: z.number().int().min(100).max(100).default(100), activities: z.array(z.string().min(2).max(40)).max(12).default([]), visitDurationMinutes: z.number().int().min(5).max(1440).nullable().optional(), schedule: z.record(z.string(), z.unknown()).default({}), accessibility: z.record(z.string(), z.unknown()).default({}), visitorInfo: z.record(z.string(), z.unknown()).default({}), nomadaRecommendations: z.record(z.string(), z.unknown()).default({}), nomadaCertified: z.boolean().optional(), averageCostMin: z.number().int().min(0).max(100000).nullable().optional(), averageCostMax: z.number().int().min(0).max(100000).nullable().optional(), costCurrency: z.string().length(3).default('GTQ'), coverKey: z.string().max(500).nullable().optional(), sourceUrl: z.string().url().max(1000).nullable().optional(), contentStatus: z.enum(['draft', 'published', 'archived']).default('draft'), isActive: z.boolean().default(true), points: z.number().int().min(0).max(10000).default(100), stamp: z.object({ code: z.string().min(3).max(40), name: z.string().min(2).max(120), description: z.string().max(1000).nullable().optional(), artworkKey: z.string().max(500).nullable().optional(), color: z.string().regex(/^#[0-9A-Fa-f]{6}$/).nullable().optional(), isActive: z.boolean().default(true) }),
 });
 const destinationSchema = destinationBaseSchema.superRefine((value, ctx) => { if (value.averageCostMin !== null && value.averageCostMax !== null && value.averageCostMin !== undefined && value.averageCostMax !== undefined && value.averageCostMin > value.averageCostMax) ctx.addIssue({ code: 'custom', path: ['averageCostMax'], message: 'El costo máximo debe ser mayor o igual al mínimo.' }); });
 const destinationPatchSchema = destinationBaseSchema.partial().extend({ humanVerified: z.boolean().optional(), verificationNotes: z.string().max(4000).nullable().optional(), stamp: destinationBaseSchema.shape.stamp.partial().optional() });
@@ -88,6 +89,18 @@ function publicDestination(destination: typeof destinations.$inferSelect, stamp?
   return { ...safeDestination, stamp: stamp ? { id: stamp.id, code: stamp.code, name: stamp.name, description: stamp.description, artworkKey: stamp.artworkKey, color: stamp.color } : null, photos: photos.map(({ id, objectKey, caption, source, credit, position, isPrimary }) => ({ id, objectKey, caption, source, credit, position, isPrimary })) };
 }
 
+function publicDestinationMapSummary(destination: typeof destinations.$inferSelect, stamp?: typeof stamps.$inferSelect) {
+  return {
+    id: destination.id, slug: destination.slug, name: destination.name, country: destination.country, countryCode: destination.countryCode,
+    officialName: destination.officialName, municipality: destination.municipality, department: destination.department, category: destination.category,
+    subcategory: destination.subcategory, description: destination.description, shortDescription: destination.shortDescription,
+    latitude: destination.latitude, longitude: destination.longitude, validationRadiusMeters: destination.validationRadiusMeters, coverKey: destination.coverKey,
+    activities: destination.activities, averageCostMin: destination.averageCostMin, averageCostMax: destination.averageCostMax, costCurrency: destination.costCurrency,
+    points: destination.points, metadata: destination.metadata,
+    stamp: stamp ? { id: stamp.id, code: stamp.code, name: stamp.name, description: stamp.description, artworkKey: stamp.artworkKey, color: stamp.color } : null,
+  };
+}
+
 async function destinationWithDetails(db: ReturnType<typeof getDb>, destination: typeof destinations.$inferSelect, admin = false) {
   const [stamp] = await db.select().from(stamps).where(eq(stamps.destinationId, destination.id)).limit(1);
   const photos = await db.select().from(destinationPhotos).where(eq(destinationPhotos.destinationId, destination.id)).orderBy(asc(destinationPhotos.position));
@@ -123,6 +136,18 @@ function adminDateRange(c: { req: { query: (key: string) => string | undefined }
   const earliest = new Date(now.getTime() - maxDays * 86400000);
   if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from > to || from < earliest) return null;
   return { from, to };
+}
+
+type Pagination = { page: number; limit: number; offset: number };
+function readPagination(c: { req: { query: (key: string) => string | undefined } }, defaults: { limit: number; max: number }): Pagination {
+  const rawPage = Number(c.req.query('page') ?? 1); const rawLimit = Number(c.req.query('limit') ?? defaults.limit);
+  const page = Number.isInteger(rawPage) && rawPage > 0 ? rawPage : 1;
+  const limit = Number.isInteger(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, defaults.max) : defaults.limit;
+  return { page, limit, offset: (page - 1) * limit };
+}
+function paginationMeta(total: number, pagination: Pagination) {
+  const totalPages = Math.max(1, Math.ceil(total / pagination.limit));
+  return { page: pagination.page, limit: pagination.limit, total, totalPages, hasNextPage: pagination.page < totalPages, hasPreviousPage: pagination.page > 1 };
 }
 
 app.get('/', (c) => c.json({ service: 'Nómada API', status: 'ok', version: 'v1' }));
@@ -168,10 +193,9 @@ app.post('/api/v1/traveler-interests', async (c) => {
 app.get('/api/v1/admin/business-interests', requireAuth, requireAdmin, async (c) => {
   const status = c.req.query('status');
   if (status && !['new', 'contacted', 'qualified', 'discarded'].includes(status)) return c.json({ error: 'validation_error', message: 'Estado inválido.' }, 422);
-  const db = getDb(c.env);
-  const query = db.select().from(businessInterests).orderBy(desc(businessInterests.createdAt));
-  const data = status ? await db.select().from(businessInterests).where(eq(businessInterests.status, status)).orderBy(desc(businessInterests.createdAt)) : await query;
-  return c.json({ data });
+  const db = getDb(c.env); const pagination = readPagination(c, { limit: 25, max: 100 }); const predicate = status ? eq(businessInterests.status, status) : undefined;
+  const [countRows, data] = await Promise.all([db.select({ value: sql<number>`count(*)::int` }).from(businessInterests).where(predicate), db.select().from(businessInterests).where(predicate).orderBy(desc(businessInterests.createdAt)).limit(pagination.limit).offset(pagination.offset)]);
+  return c.json({ data, pagination: paginationMeta(countRows[0]?.value ?? 0, pagination) });
 });
 app.patch('/api/v1/admin/business-interests/:id', requireAuth, requireAdmin, async (c) => {
   const parsed = businessInterestPatchSchema.safeParse(await c.req.json().catch(() => null));
@@ -189,8 +213,9 @@ app.patch('/api/v1/admin/business-interests/:id', requireAuth, requireAdmin, asy
 app.get('/api/v1/admin/traveler-interests', requireAuth, requireAdmin, async (c) => {
   const db = getDb(c.env); const status = c.req.query('status'); const query = (c.req.query('q') ?? '').trim().slice(0, 80);
   const filters = [status && ['new', 'contacted', 'qualified', 'discarded'].includes(status) ? eq(travelerInterests.status, status) : undefined, query ? sql`(${travelerInterests.fullName} ilike ${`%${query}%`} or ${travelerInterests.email} ilike ${`%${query}%`})` : undefined].filter(Boolean) as any[];
-  const data = await db.select().from(travelerInterests).where(filters.length ? and(...filters) : undefined).orderBy(desc(travelerInterests.createdAt)).limit(250);
-  return c.json({ data });
+  const pagination = readPagination(c, { limit: 25, max: 100 }); const predicate = filters.length ? and(...filters) : undefined;
+  const [countRows, data] = await Promise.all([db.select({ value: sql<number>`count(*)::int` }).from(travelerInterests).where(predicate), db.select().from(travelerInterests).where(predicate).orderBy(desc(travelerInterests.createdAt)).limit(pagination.limit).offset(pagination.offset)]);
+  return c.json({ data, pagination: paginationMeta(countRows[0]?.value ?? 0, pagination) });
 });
 app.patch('/api/v1/admin/traveler-interests/:id', requireAuth, requireAdmin, async (c) => {
   const parsed = travelerInterestPatchSchema.safeParse(await c.req.json().catch(() => null));
@@ -348,21 +373,45 @@ app.get('/api/v1/media/documentos/:key{.+}', requireAuth, async (c) => {
 app.get('/api/v1/destinations', async (c) => {
   // `CacheStorage` del DOM no declara `default`, pero el runtime de Workers sí.
   const catalogCache = (caches as unknown as { default: Cache }).default;
-  const cacheKey = new Request(c.req.url, { method: 'GET' });
+  const cacheUrl = new URL(c.req.url); cacheUrl.searchParams.set('__catalogVersion', '2');
+  const cacheKey = new Request(cacheUrl.toString(), { method: 'GET' });
   const cached = await catalogCache.match(cacheKey);
   if (cached) return cached;
-  const db = getDb(c.env); const department = c.req.query('department'); const countryCode = c.req.query('country')?.trim().toUpperCase();
+  const db = getDb(c.env); const department = c.req.query('department'); const countryCode = c.req.query('country')?.trim().toUpperCase(); const view = c.req.query('view');
+  const pagination = readPagination(c, view === 'map' ? { limit: 120, max: 250 } : { limit: 24, max: 100 });
   const conditions = [eq(destinations.isActive, true), eq(destinations.contentStatus, 'published')];
   if (department) conditions.push(eq(destinations.department, department));
   if (countryCode && /^[A-Z]{2}$/.test(countryCode)) conditions.push(eq(destinations.countryCode, countryCode));
   const predicate = and(...conditions);
-  const rows = await db.select().from(destinations).where(predicate).orderBy(destinations.name);
+  const [countRows, rows] = await Promise.all([
+    db.select({ value: sql<number>`count(*)::int` }).from(destinations).where(predicate),
+    db.select().from(destinations).where(predicate).orderBy(destinations.name).limit(pagination.limit).offset(pagination.offset),
+  ]);
   // El catálogo es público y cambia desde Administración, no por cada visita.
   // Cloudflare puede responderlo desde el borde sin volver a PostgreSQL.
   c.header('Cache-Control', 'public, max-age=300, s-maxage=21600, stale-while-revalidate=86400');
-  const response = c.json({ data: await Promise.all(rows.map((row) => destinationWithDetails(db, row))) });
+  if (view === 'map') {
+    const ids = rows.map((row) => row.id);
+    const stampRows = ids.length ? await db.select().from(stamps).where(inArray(stamps.destinationId, ids)) : [];
+    const stampsByDestination = new Map(stampRows.filter((stamp) => !!stamp.destinationId).map((stamp) => [stamp.destinationId!, stamp]));
+    const response = c.json({ data: rows.map((row) => publicDestinationMapSummary(row, stampsByDestination.get(row.id))), pagination: paginationMeta(countRows[0]?.value ?? 0, pagination) });
+    c.executionCtx.waitUntil(catalogCache.put(cacheKey, response.clone()));
+    return response;
+  }
+  const response = c.json({ data: await Promise.all(rows.map((row) => destinationWithDetails(db, row))), pagination: paginationMeta(countRows[0]?.value ?? 0, pagination) });
   c.executionCtx.waitUntil(catalogCache.put(cacheKey, response.clone()));
   return response;
+});
+app.get('/api/v1/destinations/countries', async (c) => {
+  const result = await getDb(c.env).execute(sql<{ country: string; countryCode: string; destinationCount: number; minLatitude: number; maxLatitude: number; minLongitude: number; maxLongitude: number }>`
+    select country, country_code as "countryCode", count(*)::int as "destinationCount",
+      min(latitude)::float8 as "minLatitude", max(latitude)::float8 as "maxLatitude",
+      min(longitude)::float8 as "minLongitude", max(longitude)::float8 as "maxLongitude"
+    from destinations where is_active = true and content_status = 'published'
+    group by country, country_code order by country asc
+  `);
+  c.header('Cache-Control', 'public, max-age=300, s-maxage=21600, stale-while-revalidate=86400');
+  return c.json({ data: Array.from(result) });
 });
 app.get('/api/v1/destinations/:id', async (c) => {
   const [row] = await getDb(c.env).select().from(destinations).where(and(eq(destinations.id, c.req.param('id')), eq(destinations.isActive, true), eq(destinations.contentStatus, 'published'))).limit(1);
@@ -374,8 +423,9 @@ async function routeWithStops(db: ReturnType<typeof getDb>, route: typeof routes
   return { ...route, stops: await Promise.all(stops.map(async (stop) => ({ position: stop.position, destination: await destinationWithDetails(db, stop.destination) }))) };
 }
 app.get('/api/v1/routes', async (c) => {
-  const db = getDb(c.env); const routeRows = await db.select().from(routes).where(eq(routes.isActive, true)).orderBy(asc(routes.name));
-  return c.json({ data: await Promise.all(routeRows.map((route) => routeWithStops(db, route))) });
+  const db = getDb(c.env); const pagination = readPagination(c, { limit: 12, max: 50 }); const predicate = eq(routes.isActive, true);
+  const [countRows, routeRows] = await Promise.all([db.select({ value: sql<number>`count(*)::int` }).from(routes).where(predicate), db.select().from(routes).where(predicate).orderBy(asc(routes.name)).limit(pagination.limit).offset(pagination.offset)]);
+  return c.json({ data: await Promise.all(routeRows.map((route) => routeWithStops(db, route))), pagination: paginationMeta(countRows[0]?.value ?? 0, pagination) });
 });
 app.get('/api/v1/routes/:slug', async (c) => {
   const db = getDb(c.env); const [route] = await db.select().from(routes).where(and(eq(routes.slug, c.req.param('slug')), eq(routes.isActive, true))).limit(1);
@@ -383,8 +433,10 @@ app.get('/api/v1/routes/:slug', async (c) => {
 });
 
 app.get('/api/v1/admin/destinations', requireAuth, requireAdmin, async (c) => {
-  const db = getDb(c.env); const rows = await db.select().from(destinations).orderBy(destinations.name);
-  return c.json({ data: await Promise.all(rows.map((row) => destinationWithDetails(db, row, true))) });
+  const db = getDb(c.env); const pagination = readPagination(c, { limit: 25, max: 100 }); const query = (c.req.query('q') ?? '').trim().slice(0, 100); const countryCode = c.req.query('country')?.trim().toUpperCase();
+  const filters = [countryCode && /^[A-Z]{2}$/.test(countryCode) ? eq(destinations.countryCode, countryCode) : undefined, query ? sql`(${destinations.name} ilike ${`%${query}%`} or ${destinations.department} ilike ${`%${query}%`})` : undefined].filter(Boolean) as any[]; const predicate = filters.length ? and(...filters) : undefined;
+  const [countRows, rows] = await Promise.all([db.select({ value: sql<number>`count(*)::int` }).from(destinations).where(predicate), db.select().from(destinations).where(predicate).orderBy(destinations.name).limit(pagination.limit).offset(pagination.offset)]);
+  return c.json({ data: await Promise.all(rows.map((row) => destinationWithDetails(db, row, true))), pagination: paginationMeta(countRows[0]?.value ?? 0, pagination) });
 });
 app.get('/api/v1/admin/destinations/:id', requireAuth, requireAdmin, async (c) => {
   const db = getDb(c.env); const [destination] = await db.select().from(destinations).where(eq(destinations.id, c.req.param('id'))).limit(1);
@@ -432,11 +484,11 @@ app.delete('/api/v1/admin/destinations/:destinationId/photos/:photoId', requireA
 
 const badgeAdminSchema = z.object({ code: z.string().trim().min(3).max(40), name: z.string().trim().min(2).max(120), description: z.string().max(2000).nullable().optional(), artworkKey: z.string().max(500).nullable().optional(), category: z.string().min(2).max(60).default('exploración'), points: z.number().int().min(0).max(10000).default(50), isActive: z.boolean().default(true), requirement: z.record(z.string(), z.unknown()).default({}) });
 const recognitionAdminSchema = z.object({ code: z.string().trim().min(3).max(40), title: z.string().trim().min(2).max(140), description: z.string().max(2000).nullable().optional(), artworkKey: z.string().max(500).nullable().optional(), category: z.string().min(2).max(60).default('comunidad'), partnerName: z.string().max(140).nullable().optional(), benefitText: z.string().max(240).nullable().optional(), points: z.number().int().min(0).max(10000).default(100), isActive: z.boolean().default(true), requirement: z.record(z.string(), z.unknown()).default({}) });
-app.get('/api/v1/admin/badges', requireAuth, requireAdmin, async (c) => c.json({ data: await getDb(c.env).select().from(badges).orderBy(asc(badges.name)) }));
+app.get('/api/v1/admin/badges', requireAuth, requireAdmin, async (c) => { const db = getDb(c.env); const pagination = readPagination(c, { limit: 30, max: 100 }); const [countRows, data] = await Promise.all([db.select({ value: sql<number>`count(*)::int` }).from(badges), db.select().from(badges).orderBy(asc(badges.name)).limit(pagination.limit).offset(pagination.offset)]); return c.json({ data, pagination: paginationMeta(countRows[0]?.value ?? 0, pagination) }); });
 app.post('/api/v1/admin/badges', requireAuth, requireAdmin, async (c) => { const parsed = badgeAdminSchema.safeParse(await c.req.json().catch(() => null)); if (!parsed.success) return c.json({ error: 'validation_error', fields: parsed.error.flatten().fieldErrors }, 422); const [badge] = await getDb(c.env).insert(badges).values(parsed.data).returning(); return c.json({ badge }, 201); });
 app.patch('/api/v1/admin/badges/:id', requireAuth, requireAdmin, async (c) => { const parsed = badgeAdminSchema.partial().safeParse(await c.req.json().catch(() => null)); if (!parsed.success) return c.json({ error: 'validation_error', fields: parsed.error.flatten().fieldErrors }, 422); const [badge] = await getDb(c.env).update(badges).set({ ...parsed.data, updatedAt: new Date() }).where(eq(badges.id, c.req.param('id'))).returning(); return badge ? c.json({ badge }) : c.json({ error: 'not_found', message: 'Insignia no encontrada.' }, 404); });
 app.post('/api/v1/admin/users/:userId/badges/:badgeId', requireAuth, requireAdmin, async (c) => { await getDb(c.env).insert(userBadges).values({ userId: c.req.param('userId'), badgeId: c.req.param('badgeId') }).onConflictDoNothing(); return c.json({ assigned: true }, 201); });
-app.get('/api/v1/admin/recognitions', requireAuth, requireAdmin, async (c) => c.json({ data: await getDb(c.env).select().from(recognitions).orderBy(asc(recognitions.title)) }));
+app.get('/api/v1/admin/recognitions', requireAuth, requireAdmin, async (c) => { const db = getDb(c.env); const pagination = readPagination(c, { limit: 30, max: 100 }); const [countRows, data] = await Promise.all([db.select({ value: sql<number>`count(*)::int` }).from(recognitions), db.select().from(recognitions).orderBy(asc(recognitions.title)).limit(pagination.limit).offset(pagination.offset)]); return c.json({ data, pagination: paginationMeta(countRows[0]?.value ?? 0, pagination) }); });
 app.post('/api/v1/admin/recognitions', requireAuth, requireAdmin, async (c) => { const parsed = recognitionAdminSchema.safeParse(await c.req.json().catch(() => null)); if (!parsed.success) return c.json({ error: 'validation_error', fields: parsed.error.flatten().fieldErrors }, 422); const [recognition] = await getDb(c.env).insert(recognitions).values(parsed.data).returning(); return c.json({ recognition }, 201); });
 app.patch('/api/v1/admin/recognitions/:id', requireAuth, requireAdmin, async (c) => { const parsed = recognitionAdminSchema.partial().safeParse(await c.req.json().catch(() => null)); if (!parsed.success) return c.json({ error: 'validation_error', fields: parsed.error.flatten().fieldErrors }, 422); const [recognition] = await getDb(c.env).update(recognitions).set({ ...parsed.data, updatedAt: new Date() }).where(eq(recognitions.id, c.req.param('id'))).returning(); return recognition ? c.json({ recognition }) : c.json({ error: 'not_found', message: 'Reconocimiento no encontrado.' }, 404); });
 app.post('/api/v1/admin/users/:userId/recognitions/:recognitionId', requireAuth, requireAdmin, async (c) => { const notes = z.object({ notes: z.string().max(1000).optional() }).safeParse(await c.req.json().catch(() => ({}))); await getDb(c.env).insert(userRecognitions).values({ userId: c.req.param('userId'), recognitionId: c.req.param('recognitionId'), notes: notes.success ? notes.data.notes : undefined }).onConflictDoNothing(); return c.json({ assigned: true }, 201); });
@@ -481,9 +533,9 @@ app.get('/api/v1/admin/analytics/visit-map', requireAuth, requireAdmin, async (c
 
 app.get('/api/v1/admin/users', requireAuth, requireAdmin, async (c) => {
   const query = (c.req.query('q') ?? '').trim().slice(0, 80); const status = c.req.query('status'); const db = getDb(c.env);
-  const filters = [status === 'active' || status === 'suspended' ? eq(users.status, status) : undefined, query ? sql`(${users.email} ilike ${`%${query}%`} or ${users.username} ilike ${`%${query}%`} or ${profiles.fullName} ilike ${`%${query}%`})` : undefined].filter(Boolean) as any[];
-  const rows = await db.select({ id: users.id, email: users.email, username: users.username, role: users.role, status: users.status, emailVerifiedAt: users.emailVerifiedAt, lastLoginAt: users.lastLoginAt, createdAt: users.createdAt, fullName: profiles.fullName, visitorType: profiles.visitorType, nationality: profiles.nationality, city: profiles.city, verificationStatus: profiles.verificationStatus, visitCount: sql<number>`count(${visits.id})::int` }).from(users).innerJoin(profiles, eq(profiles.userId, users.id)).leftJoin(visits, and(eq(visits.userId, users.id), eq(visits.status, 'verified'))).where(filters.length ? and(...filters) : undefined).groupBy(users.id, profiles.userId).orderBy(desc(users.createdAt)).limit(100);
-  return c.json({ data: rows });
+  const filters = [status === 'active' || status === 'suspended' ? eq(users.status, status) : undefined, query ? sql`(${users.email} ilike ${`%${query}%`} or ${users.username} ilike ${`%${query}%`} or ${profiles.fullName} ilike ${`%${query}%`})` : undefined].filter(Boolean) as any[]; const predicate = filters.length ? and(...filters) : undefined; const pagination = readPagination(c, { limit: 25, max: 100 });
+  const [countRows, rows] = await Promise.all([db.select({ value: sql<number>`count(*)::int` }).from(users).innerJoin(profiles, eq(profiles.userId, users.id)).where(predicate), db.select({ id: users.id, email: users.email, username: users.username, role: users.role, status: users.status, emailVerifiedAt: users.emailVerifiedAt, lastLoginAt: users.lastLoginAt, createdAt: users.createdAt, fullName: profiles.fullName, visitorType: profiles.visitorType, nationality: profiles.nationality, city: profiles.city, verificationStatus: profiles.verificationStatus, visitCount: sql<number>`count(${visits.id})::int` }).from(users).innerJoin(profiles, eq(profiles.userId, users.id)).leftJoin(visits, and(eq(visits.userId, users.id), eq(visits.status, 'verified'))).where(predicate).groupBy(users.id, profiles.userId).orderBy(desc(users.createdAt)).limit(pagination.limit).offset(pagination.offset)]);
+  return c.json({ data: rows, pagination: paginationMeta(countRows[0]?.value ?? 0, pagination) });
 });
 
 app.get('/api/v1/admin/users/:id', requireAuth, requireAdmin, async (c) => {
@@ -528,15 +580,14 @@ app.get('/api/v1/admin/users/:id/visits', requireAuth, requireAdmin, async (c) =
 });
 
 app.get('/api/v1/admin/posts', requireAuth, requireAdmin, async (c) => {
-  const status = c.req.query('status'); const predicate = status === 'published' || status === 'hidden' || status === 'review' ? eq(posts.status, status) : undefined;
-  const rows = await getDb(c.env).select({ post: posts, username: users.username, fullName: profiles.fullName }).from(posts).innerJoin(users, eq(users.id, posts.userId)).innerJoin(profiles, eq(profiles.userId, users.id)).where(predicate).orderBy(desc(posts.createdAt)).limit(100);
-  const db = getDb(c.env);
+  const status = c.req.query('status'); const predicate = status === 'published' || status === 'hidden' || status === 'review' ? eq(posts.status, status) : undefined; const db = getDb(c.env); const pagination = readPagination(c, { limit: 25, max: 100 });
+  const [countRows, rows] = await Promise.all([db.select({ value: sql<number>`count(*)::int` }).from(posts).where(predicate), db.select({ post: posts, username: users.username, fullName: profiles.fullName }).from(posts).innerJoin(users, eq(users.id, posts.userId)).innerJoin(profiles, eq(profiles.userId, users.id)).where(predicate).orderBy(desc(posts.createdAt)).limit(pagination.limit).offset(pagination.offset)]);
   const data = await Promise.all(rows.map(async (row) => ({
     ...row,
     media: await db.select({ id: postMedia.id, objectKey: postMedia.objectKey, mediaType: postMedia.mediaType, position: postMedia.position, width: postMedia.width, height: postMedia.height })
       .from(postMedia).where(eq(postMedia.postId, row.post.id)).orderBy(asc(postMedia.position)),
   })));
-  return c.json({ data });
+  return c.json({ data, pagination: paginationMeta(countRows[0]?.value ?? 0, pagination) });
 });
 
 app.patch('/api/v1/admin/posts/:id', requireAuth, requireAdmin, async (c) => {
@@ -548,9 +599,9 @@ app.patch('/api/v1/admin/posts/:id', requireAuth, requireAdmin, async (c) => {
 });
 
 app.get('/api/v1/admin/verifications', requireAuth, requireAdmin, async (c) => {
-  const status = c.req.query('status'); const predicate = status === 'pending' || status === 'approved' || status === 'rejected' ? eq(identityVerifications.status, status) : undefined;
-  const rows = await getDb(c.env).select({ verification: { id: identityVerifications.id, userId: identityVerifications.userId, documentType: identityVerifications.documentType, status: identityVerifications.status, reviewerNotes: identityVerifications.reviewerNotes, reviewedAt: identityVerifications.reviewedAt, createdAt: identityVerifications.createdAt, hasBack: sql<boolean>`${identityVerifications.documentBackKey} is not null`, hasSelfie: sql<boolean>`${identityVerifications.selfieKey} is not null` }, email: users.email, username: users.username, fullName: profiles.fullName }).from(identityVerifications).innerJoin(users, eq(users.id, identityVerifications.userId)).innerJoin(profiles, eq(profiles.userId, users.id)).where(predicate).orderBy(desc(identityVerifications.createdAt)).limit(100);
-  return c.json({ data: rows });
+  const status = c.req.query('status'); const predicate = status === 'pending' || status === 'approved' || status === 'rejected' ? eq(identityVerifications.status, status) : undefined; const db = getDb(c.env); const pagination = readPagination(c, { limit: 25, max: 100 });
+  const [countRows, rows] = await Promise.all([db.select({ value: sql<number>`count(*)::int` }).from(identityVerifications).where(predicate), db.select({ verification: { id: identityVerifications.id, userId: identityVerifications.userId, documentType: identityVerifications.documentType, status: identityVerifications.status, reviewerNotes: identityVerifications.reviewerNotes, reviewedAt: identityVerifications.reviewedAt, createdAt: identityVerifications.createdAt, hasBack: sql<boolean>`${identityVerifications.documentBackKey} is not null`, hasSelfie: sql<boolean>`${identityVerifications.selfieKey} is not null` }, email: users.email, username: users.username, fullName: profiles.fullName }).from(identityVerifications).innerJoin(users, eq(users.id, identityVerifications.userId)).innerJoin(profiles, eq(profiles.userId, users.id)).where(predicate).orderBy(desc(identityVerifications.createdAt)).limit(pagination.limit).offset(pagination.offset)]);
+  return c.json({ data: rows, pagination: paginationMeta(countRows[0]?.value ?? 0, pagination) });
 });
 
 app.get('/api/v1/admin/verifications/:id/documents/:document', requireAuth, requireAdmin, async (c) => {
@@ -577,17 +628,16 @@ app.patch('/api/v1/admin/verifications/:id', requireAuth, requireAdmin, async (c
 });
 
 app.get('/api/v1/posts', async (c) => {
-  const limit = Math.min(Number(c.req.query('limit') ?? 20), 50);
-  const db = getDb(c.env);
-  const rows = await db.select({ post: posts, username: users.username, fullName: profiles.fullName, avatarKey: profiles.avatarKey }).from(posts).innerJoin(users, eq(posts.userId, users.id)).innerJoin(profiles, eq(posts.userId, profiles.userId)).where(and(sql`${posts.status} in ('published', 'review')`, eq(posts.visibility, 'public'))).orderBy(desc(posts.createdAt)).limit(limit);
+  const pagination = readPagination(c, { limit: 12, max: 50 }); const db = getDb(c.env); const predicate = and(sql`${posts.status} in ('published', 'review')`, eq(posts.visibility, 'public'));
+  const [countRows, rows] = await Promise.all([db.select({ value: sql<number>`count(*)::int` }).from(posts).where(predicate), db.select({ post: posts, username: users.username, fullName: profiles.fullName, avatarKey: profiles.avatarKey }).from(posts).innerJoin(users, eq(posts.userId, users.id)).innerJoin(profiles, eq(posts.userId, profiles.userId)).where(predicate).orderBy(desc(posts.createdAt)).limit(pagination.limit).offset(pagination.offset)]);
   const data = await Promise.all(rows.map(async (row) => ({ ...row, media: await db.select({ objectKey: postMedia.objectKey, mediaType: postMedia.mediaType, position: postMedia.position }).from(postMedia).where(eq(postMedia.postId, row.post.id)).orderBy(postMedia.position) })));
-  return c.json({ data });
+  return c.json({ data, pagination: paginationMeta(countRows[0]?.value ?? 0, pagination) });
 });
 app.get('/api/v1/posts/me', requireAuth, async (c) => {
-  const db = getDb(c.env);
-  const rows = await db.select({ post: posts, username: users.username, fullName: profiles.fullName, avatarKey: profiles.avatarKey }).from(posts).innerJoin(users, eq(posts.userId, users.id)).innerJoin(profiles, eq(posts.userId, profiles.userId)).where(eq(posts.userId, c.get('userId'))).orderBy(desc(posts.createdAt));
+  const pagination = readPagination(c, { limit: 12, max: 50 }); const db = getDb(c.env); const predicate = eq(posts.userId, c.get('userId'));
+  const [countRows, rows] = await Promise.all([db.select({ value: sql<number>`count(*)::int` }).from(posts).where(predicate), db.select({ post: posts, username: users.username, fullName: profiles.fullName, avatarKey: profiles.avatarKey }).from(posts).innerJoin(users, eq(posts.userId, users.id)).innerJoin(profiles, eq(posts.userId, profiles.userId)).where(predicate).orderBy(desc(posts.createdAt)).limit(pagination.limit).offset(pagination.offset)]);
   const data = await Promise.all(rows.map(async (row) => ({ ...row, media: await db.select({ objectKey: postMedia.objectKey, mediaType: postMedia.mediaType, position: postMedia.position }).from(postMedia).where(eq(postMedia.postId, row.post.id)).orderBy(postMedia.position) })));
-  return c.json({ data });
+  return c.json({ data, pagination: paginationMeta(countRows[0]?.value ?? 0, pagination) });
 });
 // El feed es público, pero el estado de interacción pertenece únicamente a la sesión.
 // Mantenerlo separado evita filtrar datos privados y permite pintar los likes guardados
@@ -606,7 +656,7 @@ app.delete('/api/v1/posts/:id/like', requireAuth, async (c) => { const db = getD
 app.patch('/api/v1/posts/:id', requireAuth, async (c) => { const parsed = z.object({ visibility: z.enum(['public', 'followers', 'private']).optional(), caption: z.string().min(1).max(800).optional() }).refine((value) => value.visibility !== undefined || value.caption !== undefined).safeParse(await c.req.json().catch(() => null)); if (!parsed.success) return c.json({ error: 'validation_error', fields: parsed.error.flatten().fieldErrors }, 422); const db = getDb(c.env); const [post] = await db.update(posts).set({ ...parsed.data, updatedAt: new Date() }).where(and(eq(posts.id, c.req.param('id')), eq(posts.userId, c.get('userId')))).returning(); return post ? c.json({ post }) : c.json({ error: 'not_found', message: 'No puedes modificar esta publicación.' }, 404); });
 app.put('/api/v1/posts/:id/save', requireAuth, async (c) => { const db = getDb(c.env); await db.insert(savedPosts).values({ postId: c.req.param('id'), userId: c.get('userId') }).onConflictDoNothing(); return c.json({ saved: true }); });
 app.delete('/api/v1/posts/:id/save', requireAuth, async (c) => { await getDb(c.env).delete(savedPosts).where(and(eq(savedPosts.postId, c.req.param('id')), eq(savedPosts.userId, c.get('userId')))); return c.body(null, 204); });
-app.get('/api/v1/posts/:id/comments', requireAuth, async (c) => { const db = getDb(c.env); const viewerId = c.get('userId'); const rows = await db.select({ comment: comments, username: users.username, fullName: profiles.fullName, avatarKey: profiles.avatarKey, likedByMe: commentLikes.commentId }).from(comments).innerJoin(users, eq(comments.userId, users.id)).innerJoin(profiles, eq(comments.userId, profiles.userId)).leftJoin(commentLikes, and(eq(commentLikes.commentId, comments.id), eq(commentLikes.userId, viewerId))).where(eq(comments.postId, c.req.param('id'))).orderBy(asc(comments.createdAt)); return c.json({ data: rows.map((row) => ({ ...row.comment, author: { username: row.username, fullName: row.fullName, avatarKey: row.avatarKey }, isLiked: !!row.likedByMe, isOwner: row.comment.userId === viewerId })) }); });
+app.get('/api/v1/posts/:id/comments', requireAuth, async (c) => { const pagination = readPagination(c, { limit: 30, max: 100 }); const db = getDb(c.env); const viewerId = c.get('userId'); const predicate = eq(comments.postId, c.req.param('id')); const [countRows, rows] = await Promise.all([db.select({ value: sql<number>`count(*)::int` }).from(comments).where(predicate), db.select({ comment: comments, username: users.username, fullName: profiles.fullName, avatarKey: profiles.avatarKey, likedByMe: commentLikes.commentId }).from(comments).innerJoin(users, eq(comments.userId, users.id)).innerJoin(profiles, eq(comments.userId, profiles.userId)).leftJoin(commentLikes, and(eq(commentLikes.commentId, comments.id), eq(commentLikes.userId, viewerId))).where(predicate).orderBy(asc(comments.createdAt)).limit(pagination.limit).offset(pagination.offset)]); return c.json({ data: rows.map((row) => ({ ...row.comment, author: { username: row.username, fullName: row.fullName, avatarKey: row.avatarKey }, isLiked: !!row.likedByMe, isOwner: row.comment.userId === viewerId })), pagination: paginationMeta(countRows[0]?.value ?? 0, pagination) }); });
 app.post('/api/v1/posts/:id/comments', requireAuth, async (c) => { const parsed = z.object({ body: z.string().trim().min(1).max(500), parentId: z.string().uuid().optional() }).safeParse(await c.req.json().catch(() => null)); if (!parsed.success) return c.json({ error: 'validation_error', fields: parsed.error.flatten().fieldErrors }, 422); const db = getDb(c.env); if (parsed.data.parentId) { const [parent] = await db.select({ id: comments.id }).from(comments).where(and(eq(comments.id, parsed.data.parentId), eq(comments.postId, c.req.param('id')))).limit(1); if (!parent) return c.json({ error: 'not_found', message: 'El comentario al que respondes no existe.' }, 404); } const [comment] = await db.insert(comments).values({ postId: c.req.param('id'), userId: c.get('userId'), parentId: parsed.data.parentId, body: parsed.data.body }).returning(); await db.update(posts).set({ commentCount: sql`${posts.commentCount} + 1`, updatedAt: new Date() }).where(eq(posts.id, c.req.param('id'))); return c.json({ comment }, 201); });
 app.patch('/api/v1/comments/:id', requireAuth, async (c) => { const parsed = z.object({ body: z.string().trim().min(1).max(500) }).safeParse(await c.req.json().catch(() => null)); if (!parsed.success) return c.json({ error: 'validation_error', fields: parsed.error.flatten().fieldErrors }, 422); const [comment] = await getDb(c.env).update(comments).set({ body: parsed.data.body, updatedAt: new Date() }).where(and(eq(comments.id, c.req.param('id')), eq(comments.userId, c.get('userId')), eq(comments.status, 'published'))).returning(); return comment ? c.json({ comment }) : c.json({ error: 'not_found', message: 'No puedes editar este comentario.' }, 404); });
 app.delete('/api/v1/comments/:id', requireAuth, async (c) => { const db = getDb(c.env); const [comment] = await db.update(comments).set({ status: 'deleted', body: 'Comentario eliminado', updatedAt: new Date() }).where(and(eq(comments.id, c.req.param('id')), eq(comments.userId, c.get('userId')), eq(comments.status, 'published'))).returning(); if (!comment) return c.json({ error: 'not_found', message: 'No puedes eliminar este comentario.' }, 404); await db.update(posts).set({ commentCount: sql`greatest(${posts.commentCount} - 1, 0)`, updatedAt: new Date() }).where(eq(posts.id, comment.postId)); return c.json({ deleted: true }); });
