@@ -20,7 +20,7 @@ app.use('*', logger());
 // Los medios públicos se sirven desde este dominio a las apps web de Nómada.
 // La ruta de medios define su propia política CORP; no la sobrescribimos aquí.
 app.use('*', secureHeaders({ crossOriginResourcePolicy: false }));
-app.use('/api/*', async (c, next) => cors({ origin: c.env.ALLOWED_ORIGINS === '*' ? '*' : c.env.ALLOWED_ORIGINS.split(',').map((x) => x.trim()), allowHeaders: ['Authorization', 'Content-Type'], allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'], maxAge: 86400 })(c, next));
+app.use('/api/*', async (c, next) => cors({ origin: c.env.ALLOWED_ORIGINS === '*' ? '*' : c.env.ALLOWED_ORIGINS.split(',').map((x) => x.trim()), allowHeaders: ['Authorization', 'Content-Type'], allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'], maxAge: 86400 })(c, next));
 
 const registerSchema = z.object({
   email: z.string().email().max(320),
