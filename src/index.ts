@@ -73,7 +73,11 @@ const travelerInterestSchema = z.object({
   consent: z.literal(true),
   websiteTrap: z.string().max(200).optional(),
 });
-const travelerInterestPatchSchema = z.object({ status: z.enum(['new', 'contacted', 'qualified', 'discarded']), }).partial().refine((value) => value.status !== undefined, { message: 'Indica un estado para actualizar.' });
+const travelerInterestPatchSchema = z.object({
+  status: z.enum(['new', 'contacted', 'qualified', 'discarded']).optional(),
+  adminNotes: z.string().trim().max(3000).nullable().optional(),
+  contactedAt: z.coerce.date().nullable().optional(),
+}).refine((value) => Object.values(value).some((entry) => entry !== undefined), { message: 'Indica al menos un campo para actualizar.' });
 
 function publicUser(user: typeof users.$inferSelect, profile?: typeof profiles.$inferSelect) {
   return { id: user.id, email: user.email, username: user.username, role: user.role, status: user.status, emailVerified: !!user.emailVerifiedAt, profile: profile ? { fullName: profile.fullName, visitorType: profile.visitorType, nationality: profile.nationality, countryCode: profile.countryCode, city: profile.city, bio: profile.bio, avatarKey: profile.avatarKey, verificationStatus: profile.verificationStatus, profileVisibility: profile.profileVisibility } : undefined };
@@ -183,14 +187,20 @@ app.patch('/api/v1/admin/business-interests/:id', requireAuth, requireAdmin, asy
   return c.json({ interest });
 });
 app.get('/api/v1/admin/traveler-interests', requireAuth, requireAdmin, async (c) => {
-  const db = getDb(c.env); const status = c.req.query('status');
-  const data = status ? await db.select().from(travelerInterests).where(eq(travelerInterests.status, status)).orderBy(desc(travelerInterests.createdAt)) : await db.select().from(travelerInterests).orderBy(desc(travelerInterests.createdAt));
+  const db = getDb(c.env); const status = c.req.query('status'); const query = (c.req.query('q') ?? '').trim().slice(0, 80);
+  const filters = [status && ['new', 'contacted', 'qualified', 'discarded'].includes(status) ? eq(travelerInterests.status, status) : undefined, query ? sql`(${travelerInterests.fullName} ilike ${`%${query}%`} or ${travelerInterests.email} ilike ${`%${query}%`})` : undefined].filter(Boolean) as any[];
+  const data = await db.select().from(travelerInterests).where(filters.length ? and(...filters) : undefined).orderBy(desc(travelerInterests.createdAt)).limit(250);
   return c.json({ data });
 });
 app.patch('/api/v1/admin/traveler-interests/:id', requireAuth, requireAdmin, async (c) => {
   const parsed = travelerInterestPatchSchema.safeParse(await c.req.json().catch(() => null));
   if (!parsed.success) return c.json({ error: 'validation_error', fields: parsed.error.flatten().fieldErrors }, 422);
-  const [interest] = await getDb(c.env).update(travelerInterests).set({ status: parsed.data.status!, updatedAt: new Date() }).where(eq(travelerInterests.id, c.req.param('id'))).returning();
+  const patch: Record<string, unknown> = { updatedAt: new Date() };
+  if (parsed.data.status !== undefined) patch.status = parsed.data.status;
+  if (parsed.data.adminNotes !== undefined) patch.adminNotes = parsed.data.adminNotes;
+  if (parsed.data.contactedAt !== undefined) patch.contactedAt = parsed.data.contactedAt;
+  else if (parsed.data.status === 'contacted') patch.contactedAt = new Date();
+  const [interest] = await getDb(c.env).update(travelerInterests).set(patch).where(eq(travelerInterests.id, c.req.param('id'))).returning();
   if (!interest) return c.json({ error: 'not_found', message: 'Solicitud no encontrada.' }, 404);
   await auditAdminAction(c, 'traveler_interest.updated', 'traveler_interest', interest.id, { status: interest.status });
   return c.json({ interest });

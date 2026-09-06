@@ -92,6 +92,13 @@
       "when": 1788501000000,
       "tag": "0012_traveler_interests",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1788502000000,
+      "tag": "0013_traveler_interest_follow_up",
+      "breakpoints": true
     }
   ]
 }

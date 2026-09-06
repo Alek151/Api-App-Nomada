@@ -140,6 +140,8 @@ export const travelerInterests = pgTable('traveler_interests', {
   travelerStyle: varchar('traveler_style', { length: 60 }),
   consent: boolean('consent').default(false).notNull(),
   status: varchar('status', { length: 24 }).default('new').notNull(),
+  adminNotes: text('admin_notes'),
+  contactedAt: timestamp('contacted_at', { withTimezone: true }),
   source: varchar('source', { length: 60 }).default('nomada_landing').notNull(),
   ...audit,
 }, (t) => [uniqueIndex('traveler_interests_email_uq').on(t.email), index('traveler_interests_status_created_idx').on(t.status, t.createdAt)]);
