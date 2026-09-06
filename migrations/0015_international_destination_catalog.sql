@@ -1,0 +1,47 @@
+ALTER TABLE destinations ADD COLUMN IF NOT EXISTS country varchar(100) NOT NULL DEFAULT 'Guatemala';
+ALTER TABLE destinations ADD COLUMN IF NOT EXISTS country_code varchar(2) NOT NULL DEFAULT 'GT';
+CREATE INDEX IF NOT EXISTS destinations_country_idx ON destinations(country_code);
+
+-- Selección inicial internacional. Son puntos editoriales, no resultados de búsqueda
+-- en tiempo real; Administración puede completar su ficha, galería y recomendaciones.
+INSERT INTO destinations (slug, name, country, country_code, department, category, description, latitude, longitude, activities, average_cost_min, average_cost_max, cost_currency, points, content_status, is_active, metadata)
+VALUES
+('chichen-itza-mx','Chichén Itzá','México','MX','Yucatán','Sitio arqueológico','Ciudad maya emblemática de la península de Yucatán.',20.6843,-88.5678,'["Cultura","Historia","A pie"]',648,1000,'MXN',160,'published',true,'{"city":"Tinum"}'),
+('teotihuacan-mx','Teotihuacán','México','MX','Estado de México','Sitio arqueológico','Pirámides monumentales de la antigua ciudad de Teotihuacán.',19.6925,-98.8438,'["Cultura","Historia","A pie"]',95,600,'MXN',160,'published',true,'{"city":"San Juan Teotihuacán"}'),
+('cenote-ik-kil-mx','Cenote Ik Kil','México','MX','Yucatán','Agua','Cenote de piedra caliza rodeado de vegetación tropical.',20.6611,-88.5386,'["Agua","Naturaleza","Fotografía"]',180,600,'MXN',120,'published',true,'{"city":"Tinum"}'),
+('tulum-mx','Zona Arqueológica de Tulum','México','MX','Quintana Roo','Playa','Ruinas mayas junto al Caribe mexicano.',20.2147,-87.4290,'["Playa","Cultura","Fotografía"]',100,600,'MXN',150,'published',true,'{"city":"Tulum"}'),
+('hierve-el-agua-mx','Hierve el Agua','México','MX','Oaxaca','Naturaleza','Cascadas petrificadas y manantiales de montaña.',16.8656,-96.2759,'["Naturaleza","Agua","Aventura"]',100,500,'MXN',120,'published',true,'{"city":"San Lorenzo Albarradas"}'),
+('cancun-playa-delfines-mx','Playa Delfines','México','MX','Quintana Roo','Playa','Playa pública de arena blanca y mar Caribe.',21.0716,-86.7744,'["Playa","Agua","Fotografía"]',0,500,'MXN',100,'published',true,'{"city":"Cancún"}'),
+('gran-canon-us','Gran Cañón','Estados Unidos','US','Arizona','Naturaleza','Cañón monumental del río Colorado.',36.1069,-112.1129,'["Naturaleza","Senderismo","Fotografía"]',20,200,'USD',180,'published',true,'{"city":"Grand Canyon Village"}'),
+('yosemite-us','Parque Nacional Yosemite','Estados Unidos','US','California','Naturaleza','Valles, cascadas y paredes de granito en Sierra Nevada.',37.8651,-119.5383,'["Naturaleza","Senderismo","Fotografía"]',35,300,'USD',180,'published',true,'{"city":"California"}'),
+('yellowstone-us','Parque Nacional Yellowstone','Estados Unidos','US','Wyoming','Naturaleza','Géiseres, fauna y paisajes geotérmicos.',44.4280,-110.5885,'["Naturaleza","Fauna","Senderismo"]',35,350,'USD',180,'published',true,'{"city":"Yellowstone"}'),
+('miami-south-beach-us','South Beach','Estados Unidos','US','Florida','Playa','Playa urbana, arquitectura art déco y vida costera.',25.7826,-80.1341,'["Playa","Fotografía","Gastronomía"]',0,250,'USD',110,'published',true,'{"city":"Miami Beach"}'),
+('golden-gate-us','Puente Golden Gate','Estados Unidos','US','California','Miradores','Icono de San Francisco con senderos y miradores.',37.8199,-122.4783,'["A pie","Fotografía","Cultura"]',0,100,'USD',100,'published',true,'{"city":"San Francisco"}'),
+('ruta-flores-sv','Ruta de las Flores','El Salvador','SV','Sonsonate','Cultura','Pueblos de montaña, cafetales, murales y cascadas.',13.9255,-89.8450,'["Cultura","Gastronomía","A pie"]',10,120,'USD',120,'published',true,'{"city":"Apaneca"}'),
+('volcan-santa-ana-sv','Volcán de Santa Ana','El Salvador','SV','Santa Ana','Volcanes','Ascenso al cráter del volcán Ilamatepec.',13.8535,-89.6308,'["Aventura","Senderismo","Volcanes"]',3,100,'USD',150,'published',true,'{"city":"Santa Ana"}'),
+('el-tunco-sv','Playa El Tunco','El Salvador','SV','La Libertad','Playa','Playa de surf conocida por su arco de roca.',13.4914,-89.3834,'["Playa","Surf","Atardeceres"]',0,120,'USD',120,'published',true,'{"city":"Tamanique"}'),
+('copan-hn','Ruinas de Copán','Honduras','HN','Copán','Sitio arqueológico','Centro ceremonial maya de estelas y esculturas.',14.8392,-89.1412,'["Cultura","Historia","A pie"]',10,50,'USD',160,'published',true,'{"city":"Copán Ruinas"}'),
+('roatan-hn','West Bay Beach','Honduras','HN','Islas de la Bahía','Playa','Arrecife y playa caribeña de aguas claras.',16.3009,-86.5986,'["Playa","Buceo","Agua"]',0,180,'USD',130,'published',true,'{"city":"Roatán"}'),
+('pico-bonito-hn','Parque Nacional Pico Bonito','Honduras','HN','Atlántida','Naturaleza','Selva tropical, ríos y senderos cerca de La Ceiba.',15.6434,-86.7769,'["Naturaleza","Senderismo","Fauna"]',10,150,'USD',140,'published',true,'{"city":"La Ceiba"}'),
+('granada-ni','Granada Colonial','Nicaragua','NI','Granada','Historia','Ciudad colonial junto al lago de Nicaragua.',11.9344,-85.9560,'["Historia","Cultura","A pie"]',0,80,'USD',100,'published',true,'{"city":"Granada"}'),
+('ometepe-ni','Isla de Ometepe','Nicaragua','NI','Rivas','Naturaleza','Isla lacustre dominada por dos volcanes.',11.5264,-85.5967,'["Naturaleza","Volcanes","Agua"]',5,150,'USD',150,'published',true,'{"city":"Ometepe"}'),
+('san-juan-del-sur-ni','San Juan del Sur','Nicaragua','NI','Rivas','Playa','Bahía del Pacífico para surf y atardeceres.',11.2521,-85.8705,'["Playa","Surf","Atardeceres"]',0,120,'USD',110,'published',true,'{"city":"San Juan del Sur"}'),
+('torres-del-paine-cl','Torres del Paine','Chile','CL','Magallanes','Naturaleza','Parque patagónico de montañas, lagos y glaciares.',-50.9423,-73.4068,'["Naturaleza","Senderismo","Fotografía"]',40,400,'USD',200,'published',true,'{"city":"Puerto Natales"}'),
+('valparaiso-cl','Valparaíso','Chile','CL','Valparaíso','Cultura','Cerros, murales, ascensores y puerto histórico.',-33.0472,-71.6127,'["Cultura","Arte","A pie"]',0,120,'USD',110,'published',true,'{"city":"Valparaíso"}'),
+('san-pedro-atacama-cl','San Pedro de Atacama','Chile','CL','Antofagasta','Naturaleza','Puerta al desierto, salares y géiseres del norte chileno.',-22.9111,-68.2011,'["Naturaleza","Fotografía","Aventura"]',0,350,'USD',160,'published',true,'{"city":"San Pedro de Atacama"}'),
+('rapa-nui-cl','Rapa Nui','Chile','CL','Isla de Pascua','Cultura','Isla polinésica conocida por sus moáis y paisaje volcánico.',-27.1127,-109.3497,'["Cultura","Historia","Playa"]',80,600,'USD',180,'published',true,'{"city":"Hanga Roa"}'),
+('iguazu-ar','Cataratas del Iguazú','Argentina','AR','Misiones','Naturaleza','Cataratas entre selva subtropical y pasarelas.',-25.6953,-54.4367,'["Naturaleza","Agua","Fotografía"]',20,120,'USD',150,'published',true,'{"city":"Puerto Iguazú"}'),
+('perito-moreno-ar','Glaciar Perito Moreno','Argentina','AR','Santa Cruz','Naturaleza','Glaciar patagónico de fácil observación desde pasarelas.',-50.4967,-73.1377,'["Naturaleza","Fotografía","Senderismo"]',30,250,'USD',180,'published',true,'{"city":"El Calafate"}'),
+('el-chalten-ar','El Chaltén','Argentina','AR','Santa Cruz','Aventura','Capital argentina del trekking frente al Fitz Roy.',-49.3315,-72.8863,'["Senderismo","Aventura","Naturaleza"]',0,200,'USD',160,'published',true,'{"city":"El Chaltén"}'),
+('buenos-aires-ar','Buenos Aires','Argentina','AR','Buenos Aires','Cultura','Barrios históricos, tango, librerías y gastronomía.',-34.6037,-58.3816,'["Cultura","Gastronomía","A pie"]',0,200,'USD',110,'published',true,'{"city":"Buenos Aires"}'),
+('cartagena-co','Ciudad Amurallada de Cartagena','Colombia','CO','Bolívar','Historia','Centro histórico caribeño de murallas y plazas.',10.4230,-75.5510,'["Historia","Cultura","A pie"]',0,180000,'COP',140,'published',true,'{"city":"Cartagena"}'),
+('tayrona-co','Parque Nacional Natural Tayrona','Colombia','CO','Magdalena','Playa','Playas, bosque tropical y senderos en el Caribe.',11.3000,-73.9500,'["Playa","Naturaleza","Senderismo"]',60000,250000,'COP',160,'published',true,'{"city":"Santa Marta"}'),
+('guatape-co','Guatapé y Piedra del Peñol','Colombia','CO','Antioquia','Miradores','Embalse colorido y ascenso a la Piedra del Peñol.',6.2200,-75.1800,'["Miradores","Agua","Fotografía"]',20000,180000,'COP',130,'published',true,'{"city":"Guatapé"}'),
+('valle-cocora-co','Valle de Cocora','Colombia','CO','Quindío','Naturaleza','Palmas de cera y rutas de montaña en el Eje Cafetero.',4.6370,-75.4840,'["Naturaleza","Senderismo","Fotografía"]',0,140000,'COP',140,'published',true,'{"city":"Salento"}'),
+('medellin-co','Medellín','Colombia','CO','Antioquia','Cultura','Arte urbano, teleféricos y cultura paisa.',6.2442,-75.5812,'["Cultura","Arte","Gastronomía"]',0,160000,'COP',110,'published',true,'{"city":"Medellín"}')
+ON CONFLICT (slug) DO UPDATE SET name=EXCLUDED.name, country=EXCLUDED.country, country_code=EXCLUDED.country_code, department=EXCLUDED.department, category=EXCLUDED.category, description=EXCLUDED.description, latitude=EXCLUDED.latitude, longitude=EXCLUDED.longitude, activities=EXCLUDED.activities, average_cost_min=EXCLUDED.average_cost_min, average_cost_max=EXCLUDED.average_cost_max, cost_currency=EXCLUDED.cost_currency, metadata=EXCLUDED.metadata, updated_at=now();
+
+INSERT INTO stamps (destination_id, code, name, description, color, is_active)
+SELECT id, 'NMD-INT-' || upper(left(replace(slug, '-', '_'), 28)), 'Sello · ' || name, 'Sello internacional de Nómada para ' || name, '#287B87', true
+FROM destinations WHERE country_code <> 'GT'
+ON CONFLICT (destination_id) DO NOTHING;
