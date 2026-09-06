@@ -129,3 +129,17 @@ export const businessInterests = pgTable('business_interests', {
   source: varchar('source', { length: 60 }).default('nomada_landing').notNull(),
   ...audit,
 }, (t) => [index('business_interests_status_created_idx').on(t.status, t.createdAt), index('business_interests_email_idx').on(t.email)]);
+
+/** Lista temprana de viajeros que quieren participar en el lanzamiento de Nómada. */
+export const travelerInterests = pgTable('traveler_interests', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  fullName: varchar('full_name', { length: 140 }).notNull(),
+  email: varchar('email', { length: 320 }).notNull(),
+  phone: varchar('phone', { length: 40 }),
+  department: varchar('department', { length: 100 }),
+  travelerStyle: varchar('traveler_style', { length: 60 }),
+  consent: boolean('consent').default(false).notNull(),
+  status: varchar('status', { length: 24 }).default('new').notNull(),
+  source: varchar('source', { length: 60 }).default('nomada_landing').notNull(),
+  ...audit,
+}, (t) => [uniqueIndex('traveler_interests_email_uq').on(t.email), index('traveler_interests_status_created_idx').on(t.status, t.createdAt)]);

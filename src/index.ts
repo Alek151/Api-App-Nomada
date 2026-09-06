@@ -6,7 +6,7 @@ import { secureHeaders } from 'hono/secure-headers';
 import { z } from 'zod';
 import { verifyAuth } from '@supabase/server/core';
 import { getDb } from './db/client';
-import { adminAuditLogs, authTokens, badges, businessInterests, commentLikes, comments, destinationPhotos, destinations, identityVerifications, postLikes, postMedia, posts, profiles, recognitions, routeStops, routes, savedPosts, sessions, stamps, userBadges, userRecognitions, userStamps, users, visits } from './db/schema';
+import { adminAuditLogs, authTokens, badges, businessInterests, commentLikes, comments, destinationPhotos, destinations, identityVerifications, postLikes, postMedia, posts, profiles, recognitions, routeStops, routes, savedPosts, sessions, stamps, travelerInterests, userBadges, userRecognitions, userStamps, users, visits } from './db/schema';
 import { openApiJson, swaggerHtml } from './docs';
 import { infoHtml } from './info';
 import { createAccessToken, hashPassword, hashToken, randomToken, verifyAccessToken, verifyPassword } from './lib/security';
@@ -50,7 +50,9 @@ const businessInterestSchema = z.object({
   businessType: z.string().trim().min(2).max(80),
   department: z.string().trim().min(2).max(100),
   municipality: z.string().trim().max(100).optional().or(z.literal('')),
-  website: z.string().trim().url().max(500).optional().or(z.literal('')),
+  // Los comercios suelen compartir @usuario, facebook.com o un URL completo.
+  // Normalizamos después para no perder solicitudes por un formato de enlace.
+  website: z.string().trim().max(500).optional().or(z.literal('')),
   socialHandle: z.string().trim().max(160).optional().or(z.literal('')),
   interest: z.enum(['visit_point', 'route_partner', 'offers', 'alliance']),
   message: z.string().trim().max(1500).optional().or(z.literal('')),
@@ -62,6 +64,16 @@ const businessInterestPatchSchema = z.object({
   adminNotes: z.string().trim().max(3000).nullable().optional(),
   contactedAt: z.coerce.date().nullable().optional(),
 }).refine((value) => Object.values(value).some((entry) => entry !== undefined), { message: 'Indica al menos un campo para actualizar.' });
+const travelerInterestSchema = z.object({
+  fullName: z.string().trim().min(2).max(140),
+  email: z.string().trim().email().max(320),
+  phone: z.string().trim().min(6).max(40).optional().or(z.literal('')),
+  department: z.string().trim().max(100).optional().or(z.literal('')),
+  travelerStyle: z.enum(['nature', 'culture', 'food', 'adventure', 'all']).optional(),
+  consent: z.literal(true),
+  websiteTrap: z.string().max(0).optional(),
+});
+const travelerInterestPatchSchema = z.object({ status: z.enum(['new', 'contacted', 'qualified', 'discarded']), }).partial().refine((value) => value.status !== undefined, { message: 'Indica un estado para actualizar.' });
 
 function publicUser(user: typeof users.$inferSelect, profile?: typeof profiles.$inferSelect) {
   return { id: user.id, email: user.email, username: user.username, role: user.role, status: user.status, emailVerified: !!user.emailVerifiedAt, profile: profile ? { fullName: profile.fullName, visitorType: profile.visitorType, nationality: profile.nationality, countryCode: profile.countryCode, city: profile.city, bio: profile.bio, avatarKey: profile.avatarKey, verificationStatus: profile.verificationStatus, profileVisibility: profile.profileVisibility } : undefined };
@@ -119,6 +131,9 @@ app.post('/api/v1/business-interests', async (c) => {
   // Campo invisible que bloquea envíos automatizados sin afectar a negocios reales.
   if (parsed.data.websiteTrap) return c.json({ interest: { accepted: true } }, 201);
   const input = parsed.data;
+  const rawWebsite = input.website || '';
+  const socialHandle = rawWebsite.startsWith('@') ? rawWebsite : (input.socialHandle || null);
+  const website = !rawWebsite || rawWebsite.startsWith('@') ? null : (/^https?:\/\//i.test(rawWebsite) ? rawWebsite : `https://${rawWebsite}`);
   const [interest] = await getDb(c.env).insert(businessInterests).values({
     companyName: input.companyName,
     contactName: input.contactName,
@@ -127,13 +142,23 @@ app.post('/api/v1/business-interests', async (c) => {
     businessType: input.businessType,
     department: input.department,
     municipality: input.municipality || null,
-    website: input.website || null,
-    socialHandle: input.socialHandle || null,
+    website,
+    socialHandle,
     interest: input.interest,
     message: input.message || null,
     consent: input.consent,
   }).returning({ id: businessInterests.id, createdAt: businessInterests.createdAt });
   return c.json({ interest, message: 'Recibimos los datos de tu negocio. El equipo Nómada te contactará pronto.' }, 201);
+});
+app.post('/api/v1/traveler-interests', async (c) => {
+  const parsed = travelerInterestSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: 'validation_error', fields: parsed.error.flatten().fieldErrors }, 422);
+  if (parsed.data.websiteTrap) return c.json({ traveler: { accepted: true } }, 201);
+  const input = parsed.data; const db = getDb(c.env);
+  const [existing] = await db.select({ id: travelerInterests.id }).from(travelerInterests).where(eq(travelerInterests.email, input.email.toLowerCase())).limit(1);
+  if (existing) return c.json({ traveler: existing, message: 'Ya estás en la lista de viajeros Nómada. Te avisaremos antes del lanzamiento.' }, 200);
+  const [traveler] = await db.insert(travelerInterests).values({ fullName: input.fullName, email: input.email.toLowerCase(), phone: input.phone || null, department: input.department || null, travelerStyle: input.travelerStyle ?? null, consent: input.consent }).returning({ id: travelerInterests.id, createdAt: travelerInterests.createdAt });
+  return c.json({ traveler, message: '¡Bienvenido a Nómada! Te avisaremos cuando puedas empezar a llenar tu pasaporte.' }, 201);
 });
 
 app.get('/api/v1/admin/business-interests', requireAuth, requireAdmin, async (c) => {
@@ -155,6 +180,19 @@ app.patch('/api/v1/admin/business-interests/:id', requireAuth, requireAdmin, asy
   const [interest] = await getDb(c.env).update(businessInterests).set(patch).where(eq(businessInterests.id, c.req.param('id'))).returning();
   if (!interest) return c.json({ error: 'not_found', message: 'Solicitud no encontrada.' }, 404);
   await auditAdminAction(c, 'business_interest.updated', 'business_interest', interest.id, { status: interest.status });
+  return c.json({ interest });
+});
+app.get('/api/v1/admin/traveler-interests', requireAuth, requireAdmin, async (c) => {
+  const db = getDb(c.env); const status = c.req.query('status');
+  const data = status ? await db.select().from(travelerInterests).where(eq(travelerInterests.status, status)).orderBy(desc(travelerInterests.createdAt)) : await db.select().from(travelerInterests).orderBy(desc(travelerInterests.createdAt));
+  return c.json({ data });
+});
+app.patch('/api/v1/admin/traveler-interests/:id', requireAuth, requireAdmin, async (c) => {
+  const parsed = travelerInterestPatchSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: 'validation_error', fields: parsed.error.flatten().fieldErrors }, 422);
+  const [interest] = await getDb(c.env).update(travelerInterests).set({ status: parsed.data.status!, updatedAt: new Date() }).where(eq(travelerInterests.id, c.req.param('id'))).returning();
+  if (!interest) return c.json({ error: 'not_found', message: 'Solicitud no encontrada.' }, 404);
+  await auditAdminAction(c, 'traveler_interest.updated', 'traveler_interest', interest.id, { status: interest.status });
   return c.json({ interest });
 });
 app.get('/api/v1/docs', (c) => c.html(swaggerHtml()));
