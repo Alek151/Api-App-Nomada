@@ -6,7 +6,7 @@ import { secureHeaders } from 'hono/secure-headers';
 import { z } from 'zod';
 import { verifyAuth } from '@supabase/server/core';
 import { getDb } from './db/client';
-import { adminAuditLogs, authTokens, badges, commentLikes, comments, destinationPhotos, destinations, identityVerifications, postLikes, postMedia, posts, profiles, recognitions, routeStops, routes, savedPosts, sessions, stamps, userBadges, userRecognitions, userStamps, users, visits } from './db/schema';
+import { adminAuditLogs, authTokens, badges, businessInterests, commentLikes, comments, destinationPhotos, destinations, identityVerifications, postLikes, postMedia, posts, profiles, recognitions, routeStops, routes, savedPosts, sessions, stamps, userBadges, userRecognitions, userStamps, users, visits } from './db/schema';
 import { openApiJson, swaggerHtml } from './docs';
 import { infoHtml } from './info';
 import { createAccessToken, hashPassword, hashToken, randomToken, verifyAccessToken, verifyPassword } from './lib/security';
@@ -42,6 +42,26 @@ const destinationBaseSchema = z.object({
 const destinationSchema = destinationBaseSchema.superRefine((value, ctx) => { if (value.averageCostMin !== null && value.averageCostMax !== null && value.averageCostMin !== undefined && value.averageCostMax !== undefined && value.averageCostMin > value.averageCostMax) ctx.addIssue({ code: 'custom', path: ['averageCostMax'], message: 'El costo máximo debe ser mayor o igual al mínimo.' }); });
 const destinationPatchSchema = destinationBaseSchema.partial().extend({ humanVerified: z.boolean().optional(), verificationNotes: z.string().max(4000).nullable().optional(), stamp: destinationBaseSchema.shape.stamp.partial().optional() });
 const destinationPhotoSchema = z.object({ objectKey: z.string().min(1).max(500), caption: z.string().max(240).nullable().optional(), source: z.literal('nomada_library').default('nomada_library'), credit: z.string().max(140).nullable().optional(), position: z.number().int().min(0).max(100).default(0), isPrimary: z.boolean().default(false) });
+const businessInterestSchema = z.object({
+  companyName: z.string().trim().min(2).max(160),
+  contactName: z.string().trim().min(2).max(140),
+  email: z.string().trim().email().max(320),
+  phone: z.string().trim().min(6).max(40).optional().or(z.literal('')),
+  businessType: z.string().trim().min(2).max(80),
+  department: z.string().trim().min(2).max(100),
+  municipality: z.string().trim().max(100).optional().or(z.literal('')),
+  website: z.string().trim().url().max(500).optional().or(z.literal('')),
+  socialHandle: z.string().trim().max(160).optional().or(z.literal('')),
+  interest: z.enum(['visit_point', 'route_partner', 'offers', 'alliance']),
+  message: z.string().trim().max(1500).optional().or(z.literal('')),
+  consent: z.literal(true),
+  websiteTrap: z.string().max(0).optional(),
+});
+const businessInterestPatchSchema = z.object({
+  status: z.enum(['new', 'contacted', 'qualified', 'discarded']).optional(),
+  adminNotes: z.string().trim().max(3000).nullable().optional(),
+  contactedAt: z.coerce.date().nullable().optional(),
+}).refine((value) => Object.values(value).some((entry) => entry !== undefined), { message: 'Indica al menos un campo para actualizar.' });
 
 function publicUser(user: typeof users.$inferSelect, profile?: typeof profiles.$inferSelect) {
   return { id: user.id, email: user.email, username: user.username, role: user.role, status: user.status, emailVerified: !!user.emailVerifiedAt, profile: profile ? { fullName: profile.fullName, visitorType: profile.visitorType, nationality: profile.nationality, countryCode: profile.countryCode, city: profile.city, bio: profile.bio, avatarKey: profile.avatarKey, verificationStatus: profile.verificationStatus, profileVisibility: profile.profileVisibility } : undefined };
@@ -93,6 +113,50 @@ app.get('/', (c) => c.json({ service: 'NÃ³mada API', status: 'ok', version: 'v
 app.get('/info', (c) => c.html(infoHtml()));
 app.get('/api/v1/health', async (c) => { try { await getDb(c.env).execute(sql`select 1`); return c.json({ status: 'healthy', database: 'connected', timestamp: new Date().toISOString() }); } catch { return c.json({ status: 'degraded', database: 'unavailable', timestamp: new Date().toISOString() }, 503); } });
 app.get('/api/v1/openapi.json', openApiJson);
+app.post('/api/v1/business-interests', async (c) => {
+  const parsed = businessInterestSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: 'validation_error', fields: parsed.error.flatten().fieldErrors }, 422);
+  // Campo invisible que bloquea envíos automatizados sin afectar a negocios reales.
+  if (parsed.data.websiteTrap) return c.json({ interest: { accepted: true } }, 201);
+  const input = parsed.data;
+  const [interest] = await getDb(c.env).insert(businessInterests).values({
+    companyName: input.companyName,
+    contactName: input.contactName,
+    email: input.email.toLowerCase(),
+    phone: input.phone || null,
+    businessType: input.businessType,
+    department: input.department,
+    municipality: input.municipality || null,
+    website: input.website || null,
+    socialHandle: input.socialHandle || null,
+    interest: input.interest,
+    message: input.message || null,
+    consent: input.consent,
+  }).returning({ id: businessInterests.id, createdAt: businessInterests.createdAt });
+  return c.json({ interest, message: 'Recibimos los datos de tu negocio. El equipo Nómada te contactará pronto.' }, 201);
+});
+
+app.get('/api/v1/admin/business-interests', requireAuth, requireAdmin, async (c) => {
+  const status = c.req.query('status');
+  if (status && !['new', 'contacted', 'qualified', 'discarded'].includes(status)) return c.json({ error: 'validation_error', message: 'Estado inválido.' }, 422);
+  const db = getDb(c.env);
+  const query = db.select().from(businessInterests).orderBy(desc(businessInterests.createdAt));
+  const data = status ? await db.select().from(businessInterests).where(eq(businessInterests.status, status)).orderBy(desc(businessInterests.createdAt)) : await query;
+  return c.json({ data });
+});
+app.patch('/api/v1/admin/business-interests/:id', requireAuth, requireAdmin, async (c) => {
+  const parsed = businessInterestPatchSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: 'validation_error', fields: parsed.error.flatten().fieldErrors }, 422);
+  const patch: Record<string, unknown> = { updatedAt: new Date() };
+  if (parsed.data.status !== undefined) patch.status = parsed.data.status;
+  if (parsed.data.adminNotes !== undefined) patch.adminNotes = parsed.data.adminNotes;
+  if (parsed.data.contactedAt !== undefined) patch.contactedAt = parsed.data.contactedAt;
+  else if (parsed.data.status === 'contacted') patch.contactedAt = new Date();
+  const [interest] = await getDb(c.env).update(businessInterests).set(patch).where(eq(businessInterests.id, c.req.param('id'))).returning();
+  if (!interest) return c.json({ error: 'not_found', message: 'Solicitud no encontrada.' }, 404);
+  await auditAdminAction(c, 'business_interest.updated', 'business_interest', interest.id, { status: interest.status });
+  return c.json({ interest });
+});
 app.get('/api/v1/docs', (c) => c.html(swaggerHtml()));
 
 // Endpoint de transiciÃ³n para tokens emitidos por Supabase Auth.

@@ -107,3 +107,25 @@ export const adminAuditLogs = pgTable('admin_audit_logs', {
   metadata: jsonb('metadata').$type<Record<string, unknown>>().default({}).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 }, (t) => [index('admin_audit_logs_actor_idx').on(t.actorUserId, t.createdAt), index('admin_audit_logs_resource_idx').on(t.resourceType, t.resourceId, t.createdAt)]);
+
+/** Solicitudes comerciales recibidas desde la landing pública de Nómada. */
+export const businessInterests = pgTable('business_interests', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  companyName: varchar('company_name', { length: 160 }).notNull(),
+  contactName: varchar('contact_name', { length: 140 }).notNull(),
+  email: varchar('email', { length: 320 }).notNull(),
+  phone: varchar('phone', { length: 40 }),
+  businessType: varchar('business_type', { length: 80 }).notNull(),
+  department: varchar('department', { length: 100 }).notNull(),
+  municipality: varchar('municipality', { length: 100 }),
+  website: varchar('website', { length: 500 }),
+  socialHandle: varchar('social_handle', { length: 160 }),
+  interest: varchar('interest', { length: 60 }).notNull(),
+  message: text('message'),
+  consent: boolean('consent').default(false).notNull(),
+  status: varchar('status', { length: 24 }).default('new').notNull(),
+  adminNotes: text('admin_notes'),
+  contactedAt: timestamp('contacted_at', { withTimezone: true }),
+  source: varchar('source', { length: 60 }).default('nomada_landing').notNull(),
+  ...audit,
+}, (t) => [index('business_interests_status_created_idx').on(t.status, t.createdAt), index('business_interests_email_idx').on(t.email)]);
