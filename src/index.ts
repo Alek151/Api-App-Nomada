@@ -535,7 +535,8 @@ app.get('/api/v1/admin/analytics/visit-map', requireAuth, requireAdmin, async (c
     from visits where status = 'verified' and visited_at between ${range.from.toISOString()}::timestamptz and ${range.to.toISOString()}::timestamptz
     group by 1, 2 order by "visitCount" desc limit ${pagination.limit} offset ${pagination.offset}
   `);
-  return c.json({ aggregation: 'grid_3_decimals', range: { from: range.from.toISOString(), to: range.to.toISOString() }, data: grid, pagination: paginationMeta(totalRows[0]?.value ?? 0, pagination) });
+  const total = Number((totalRows[0] as { value?: number } | undefined)?.value ?? 0);
+  return c.json({ aggregation: 'grid_3_decimals', range: { from: range.from.toISOString(), to: range.to.toISOString() }, data: grid, pagination: paginationMeta(total, pagination) });
 });
 
 app.get('/api/v1/admin/users', requireAuth, requireAdmin, async (c) => {
