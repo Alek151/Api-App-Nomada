@@ -7,7 +7,7 @@ import { secureHeaders } from 'hono/secure-headers';
 import { z } from 'zod';
 import { verifyAuth } from '@supabase/server/core';
 import { getDb } from './db/client';
-import { adminAuditLogs, authTokens, badges, businessInterests, commentLikes, comments, destinationPhotos, destinations, identityVerifications, postLikes, postMedia, posts, profiles, recognitions, routeStops, routes, savedPosts, sessions, stamps, travelerInterests, userBadges, userRecognitions, userStamps, users, visits } from './db/schema';
+import { adminAuditLogs, authTokens, badges, businessInterests, commentLikes, comments, destinationPhotos, destinations, identityVerifications, postLikes, postMedia, posts, profiles, recognitions, routeStops, routes, savedDestinations, savedPosts, sessions, stamps, travelerInterests, userBadges, userRecognitions, userStamps, users, visits } from './db/schema';
 import { openApiJson, swaggerHtml } from './docs';
 import { infoHtml } from './info';
 import { createAccessToken, hashPassword, hashToken, randomToken, verifyAccessToken, verifyPassword } from './lib/security';
@@ -411,6 +411,24 @@ app.get('/api/v1/destinations/:id', async (c) => {
   const [row] = await getDb(c.env).select().from(destinations).where(and(eq(destinations.id, c.req.param('id')), eq(destinations.isActive, true), eq(destinations.contentStatus, 'published'))).limit(1);
   return row ? c.json({ destination: await destinationWithDetails(getDb(c.env), row) }) : c.json({ error: 'not_found', message: 'Destino no encontrado.' }, 404);
 });
+app.get('/api/v1/me/saved-destinations', requireAuth, async (c) => {
+  const db = getDb(c.env); const userId = c.get('userId'); const pagination = readPagination(c, { limit: 24, max: 100 }); const collection = c.req.query('collection')?.trim().slice(0, 80);
+  const predicate = collection ? and(eq(savedDestinations.userId, userId), eq(savedDestinations.collection, collection)) : eq(savedDestinations.userId, userId);
+  const [countRows, rows, collections] = await Promise.all([
+    db.select({ value: sql<number>`count(*)::int` }).from(savedDestinations).where(predicate),
+    db.select({ saved: savedDestinations, destination: destinations }).from(savedDestinations).innerJoin(destinations, eq(savedDestinations.destinationId, destinations.id)).where(predicate).orderBy(desc(savedDestinations.createdAt)).limit(pagination.limit).offset(pagination.offset),
+    db.select({ name: savedDestinations.collection, count: sql<number>`count(*)::int` }).from(savedDestinations).where(eq(savedDestinations.userId, userId)).groupBy(savedDestinations.collection).orderBy(asc(savedDestinations.collection)),
+  ]);
+  return c.json({ data: await Promise.all(rows.map(async (row) => ({ ...(await destinationWithDetails(db, row.destination)), collection: row.saved.collection, savedAt: row.saved.createdAt }))), collections, pagination: paginationMeta(countRows[0]?.value ?? 0, pagination) });
+});
+app.put('/api/v1/destinations/:id/save', requireAuth, async (c) => {
+  const parsed = z.object({ collection: z.string().trim().min(1).max(80).default('Guardados') }).safeParse(await c.req.json().catch(() => ({}))); if (!parsed.success) return c.json({ error: 'validation_error', fields: parsed.error.flatten().fieldErrors }, 422);
+  const db = getDb(c.env); const [destination] = await db.select({ id: destinations.id }).from(destinations).where(and(eq(destinations.id, c.req.param('id')), eq(destinations.isActive, true), eq(destinations.contentStatus, 'published'))).limit(1);
+  if (!destination) return c.json({ error: 'not_found', message: 'Destino no encontrado.' }, 404);
+  await db.insert(savedDestinations).values({ destinationId: destination.id, userId: c.get('userId'), collection: parsed.data.collection }).onConflictDoUpdate({ target: [savedDestinations.destinationId, savedDestinations.userId], set: { collection: parsed.data.collection } });
+  return c.json({ saved: true, collection: parsed.data.collection });
+});
+app.delete('/api/v1/destinations/:id/save', requireAuth, async (c) => { await getDb(c.env).delete(savedDestinations).where(and(eq(savedDestinations.destinationId, c.req.param('id')), eq(savedDestinations.userId, c.get('userId')))); return c.body(null, 204); });
 
 async function routeWithStops(db: ReturnType<typeof getDb>, route: typeof routes.$inferSelect) {
   const stops = await db.select({ position: routeStops.position, destination: destinations }).from(routeStops).innerJoin(destinations, eq(routeStops.destinationId, destinations.id)).where(eq(routeStops.routeId, route.id)).orderBy(asc(routeStops.position));
