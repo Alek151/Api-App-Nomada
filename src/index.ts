@@ -121,7 +121,7 @@ function adminDateRange(c: { req: { query: (key: string) => string | undefined }
   return { from, to };
 }
 
-app.get('/', (c) => c.json({ service: 'NÃ³mada API', status: 'ok', version: 'v1' }));
+app.get('/', (c) => c.json({ service: 'Nómada API', status: 'ok', version: 'v1' }));
 app.get('/info', (c) => c.html(infoHtml()));
 app.get('/api/v1/health', async (c) => { try { await getDb(c.env).execute(sql`select 1`); return c.json({ status: 'healthy', database: 'connected', timestamp: new Date().toISOString() }); } catch { return c.json({ status: 'degraded', database: 'unavailable', timestamp: new Date().toISOString() }, 503); } });
 app.get('/api/v1/openapi.json', openApiJson);
@@ -634,7 +634,7 @@ app.get('/api/v1/passport', requireAuth, async (c) => {
 });
 
 app.notFound((c) => c.json({ error: 'not_found', message: 'Ruta no encontrada.' }, 404));
-app.onError((error, c) => { console.error(error); return c.json({ error: 'internal_error', message: c.env.APP_ENV === 'development' ? error.message : 'OcurriÃ³ un error inesperado.' }, 500); });
+app.onError((error, c) => { console.error(error); return c.json({ error: 'internal_error', message: c.env.APP_ENV === 'development' ? error.message : 'Ocurrió un error inesperado.' }, 500); });
 
 export default app;
 
