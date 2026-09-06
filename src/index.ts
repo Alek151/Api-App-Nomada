@@ -352,6 +352,9 @@ app.get('/api/v1/destinations', async (c) => {
   if (countryCode && /^[A-Z]{2}$/.test(countryCode)) conditions.push(eq(destinations.countryCode, countryCode));
   const predicate = and(...conditions);
   const rows = await db.select().from(destinations).where(predicate).orderBy(destinations.name);
+  // El catálogo es público y cambia desde Administración, no por cada visita.
+  // Cloudflare puede responderlo desde el borde sin volver a PostgreSQL.
+  c.header('Cache-Control', 'public, max-age=300, s-maxage=21600, stale-while-revalidate=86400');
   return c.json({ data: await Promise.all(rows.map((row) => destinationWithDetails(db, row))) });
 });
 app.get('/api/v1/destinations/:id', async (c) => {
