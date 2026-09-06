@@ -346,6 +346,11 @@ app.get('/api/v1/media/documentos/:key{.+}', requireAuth, async (c) => {
 });
 
 app.get('/api/v1/destinations', async (c) => {
+  // `CacheStorage` del DOM no declara `default`, pero el runtime de Workers sí.
+  const catalogCache = (caches as unknown as { default: Cache }).default;
+  const cacheKey = new Request(c.req.url, { method: 'GET' });
+  const cached = await catalogCache.match(cacheKey);
+  if (cached) return cached;
   const db = getDb(c.env); const department = c.req.query('department'); const countryCode = c.req.query('country')?.trim().toUpperCase();
   const conditions = [eq(destinations.isActive, true), eq(destinations.contentStatus, 'published')];
   if (department) conditions.push(eq(destinations.department, department));
@@ -355,7 +360,9 @@ app.get('/api/v1/destinations', async (c) => {
   // El catálogo es público y cambia desde Administración, no por cada visita.
   // Cloudflare puede responderlo desde el borde sin volver a PostgreSQL.
   c.header('Cache-Control', 'public, max-age=300, s-maxage=21600, stale-while-revalidate=86400');
-  return c.json({ data: await Promise.all(rows.map((row) => destinationWithDetails(db, row))) });
+  const response = c.json({ data: await Promise.all(rows.map((row) => destinationWithDetails(db, row))) });
+  c.executionCtx.waitUntil(catalogCache.put(cacheKey, response.clone()));
+  return response;
 });
 app.get('/api/v1/destinations/:id', async (c) => {
   const [row] = await getDb(c.env).select().from(destinations).where(and(eq(destinations.id, c.req.param('id')), eq(destinations.isActive, true), eq(destinations.contentStatus, 'published'))).limit(1);
