@@ -120,6 +120,13 @@
       "when": 1788505000000,
       "tag": "0016_mexico_complete_catalog",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1788506000000,
+      "tag": "0017_northern_central_america_catalog",
+      "breakpoints": true
     }
   ]
 }

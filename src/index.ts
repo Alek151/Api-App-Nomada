@@ -346,8 +346,11 @@ app.get('/api/v1/media/documentos/:key{.+}', requireAuth, async (c) => {
 });
 
 app.get('/api/v1/destinations', async (c) => {
-  const db = getDb(c.env); const department = c.req.query('department');
-  const predicate = department ? and(eq(destinations.isActive, true), eq(destinations.contentStatus, 'published'), eq(destinations.department, department)) : and(eq(destinations.isActive, true), eq(destinations.contentStatus, 'published'));
+  const db = getDb(c.env); const department = c.req.query('department'); const countryCode = c.req.query('country')?.trim().toUpperCase();
+  const conditions = [eq(destinations.isActive, true), eq(destinations.contentStatus, 'published')];
+  if (department) conditions.push(eq(destinations.department, department));
+  if (countryCode && /^[A-Z]{2}$/.test(countryCode)) conditions.push(eq(destinations.countryCode, countryCode));
+  const predicate = and(...conditions);
   const rows = await db.select().from(destinations).where(predicate).orderBy(destinations.name);
   return c.json({ data: await Promise.all(rows.map((row) => destinationWithDetails(db, row))) });
 });
