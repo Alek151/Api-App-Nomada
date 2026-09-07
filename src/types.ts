@@ -16,6 +16,9 @@ export interface Env {
   DATABASE_NAME?: string;
   DATABASE_USER?: string;
   DATABASE_PASSWORD?: string;
+  GOOGLE_CLIENT_IDS?: string;
+  GOOGLE_WEB_CLIENT_ID?: string;
+  GOOGLE_WEB_CLIENT_SECRET?: string;
 }
 
 export type AppVariables = { userId: string; sessionId: string };

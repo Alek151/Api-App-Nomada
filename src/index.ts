@@ -5,6 +5,7 @@ import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
 import { secureHeaders } from 'hono/secure-headers';
 import { z } from 'zod';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { verifyAuth } from '@supabase/server/core';
 import { getDb } from './db/client';
 import { adminAuditLogs, authTokens, badges, businessInterests, commentLikes, comments, contentReports, destinationPhotos, destinations, directMessages, follows, identityVerifications, notifications, postLikes, postMedia, profileLikes, posts, profiles, recognitions, routeStops, routes, savedDestinations, savedPosts, sessions, stamps, travelConnections, travelerInterests, userBadges, userBlocks, userRecognitions, userStamps, users, visits } from './db/schema';
@@ -25,7 +26,8 @@ app.use('/api/*', async (c, next) => cors({ origin: c.env.ALLOWED_ORIGINS === '*
 const registerSchema = z.object({
   email: z.string().email().max(320),
   username: z.string().min(3).max(40).regex(/^[a-zA-Z0-9._]+$/),
-  password: z.string().min(8).max(128),
+  password: z.string().min(8).max(128).optional(),
+  googleIdToken: z.string().min(20).optional(),
   fullName: z.string().min(2).max(140),
   visitorType: z.enum(['local', 'foreign']),
   nationality: z.string().max(80).optional(),
@@ -35,8 +37,11 @@ const registerSchema = z.object({
   birthDate: z.coerce.date(),
   documentType: z.enum(['dpi', 'passport']).optional(),
   documentNumber: z.string().min(4).max(40),
+}).superRefine((value, ctx) => {
+  if (!value.password && !value.googleIdToken) ctx.addIssue({ code: 'custom', path: ['password'], message: 'Ingresa una contraseña o continúa con Google.' });
 });
 const loginSchema = z.object({ email: z.string().email(), password: z.string().min(1), deviceName: z.string().max(120).optional() });
+const googleLoginSchema = z.object({ idToken: z.string().min(20), deviceName: z.string().max(120).optional() });
 const destinationBaseSchema = z.object({
   slug: z.string().min(3).max(120).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/), name: z.string().min(2).max(160), officialName: z.string().max(200).nullable().optional(), municipality: z.string().max(100).nullable().optional(), department: z.string().min(2).max(100), category: z.string().min(2).max(60), subcategory: z.string().max(100).nullable().optional(), description: z.string().min(10).max(4000), shortDescription: z.string().max(320).nullable().optional(), history: z.string().max(12000).nullable().optional(), historicalPeriod: z.string().max(160).nullable().optional(), approximateDate: z.string().max(160).nullable().optional(), unescoStatus: z.boolean().default(false), unescoType: z.string().max(40).nullable().optional(), websiteOfficial: z.string().url().max(1000).nullable().optional(), wikipediaUrl: z.string().url().max(1000).nullable().optional(), coordinatesSource: z.string().max(160).nullable().optional(), historySource: z.string().max(240).nullable().optional(), latitude: z.number().min(-90).max(90), longitude: z.number().min(-180).max(180), validationRadiusMeters: z.number().int().min(100).max(100).default(100), activities: z.array(z.string().min(2).max(40)).max(12).default([]), visitDurationMinutes: z.number().int().min(5).max(1440).nullable().optional(), schedule: z.record(z.string(), z.unknown()).default({}), accessibility: z.record(z.string(), z.unknown()).default({}), visitorInfo: z.record(z.string(), z.unknown()).default({}), nomadaRecommendations: z.record(z.string(), z.unknown()).default({}), nomadaCertified: z.boolean().optional(), averageCostMin: z.number().int().min(0).max(100000).nullable().optional(), averageCostMax: z.number().int().min(0).max(100000).nullable().optional(), costCurrency: z.string().length(3).default('GTQ'), coverKey: z.string().max(500).nullable().optional(), sourceUrl: z.string().url().max(1000).nullable().optional(), contentStatus: z.enum(['draft', 'published', 'archived']).default('draft'), isActive: z.boolean().default(true), points: z.number().int().min(0).max(10000).default(100), stamp: z.object({ code: z.string().min(3).max(40), name: z.string().min(2).max(120), description: z.string().max(1000).nullable().optional(), artworkKey: z.string().max(500).nullable().optional(), color: z.string().regex(/^#[0-9A-Fa-f]{6}$/).nullable().optional(), isActive: z.boolean().default(true) }),
 });
@@ -82,6 +87,18 @@ const travelerInterestPatchSchema = z.object({
 
 function publicUser(user: typeof users.$inferSelect, profile?: typeof profiles.$inferSelect) {
   return { id: user.id, email: user.email, username: user.username, role: user.role, status: user.status, emailVerified: !!user.emailVerifiedAt, profile: profile ? { fullName: profile.fullName, visitorType: profile.visitorType, nationality: profile.nationality, countryCode: profile.countryCode, city: profile.city, bio: profile.bio, avatarKey: profile.avatarKey, verificationStatus: profile.verificationStatus, profileVisibility: profile.profileVisibility } : undefined };
+}
+
+type GoogleIdentity = { subject: string; email: string; fullName: string; avatarUrl?: string };
+const googleJwks = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
+
+async function verifyGoogleIdToken(env: Env, idToken: string): Promise<GoogleIdentity> {
+  const audiences = (env.GOOGLE_CLIENT_IDS || env.GOOGLE_WEB_CLIENT_ID || '').split(',').map((value) => value.trim()).filter(Boolean);
+  if (!audiences.length) throw new Error('Google Sign-In no está configurado en el servidor.');
+  const { payload } = await jwtVerify(idToken, googleJwks, { issuer: ['https://accounts.google.com', 'accounts.google.com'], audience: audiences });
+  if (!payload.sub || typeof payload.email !== 'string' || payload.email_verified !== true) throw new Error('Google no confirmó una dirección de correo válida.');
+  const fullName = typeof payload.name === 'string' && payload.name.trim() ? payload.name.trim().slice(0, 140) : payload.email.split('@')[0];
+  return { subject: payload.sub, email: payload.email.trim().toLowerCase(), fullName, avatarUrl: typeof payload.picture === 'string' ? payload.picture : undefined };
 }
 
 function publicDestination(destination: typeof destinations.$inferSelect, stamp?: typeof stamps.$inferSelect, photos: (typeof destinationPhotos.$inferSelect)[] = []) {
@@ -254,14 +271,21 @@ app.get('/api/v1/supabase/me', async (c) => {
 
 app.post('/api/v1/auth/register', async (c) => {
   const parsed = registerSchema.safeParse(await c.req.json().catch(() => null)); if (!parsed.success) return c.json({ error: 'validation_error', message: 'Revisa los datos enviados.', fields: parsed.error.flatten().fieldErrors }, 422);
-  const input = parsed.data; const documentType = input.documentType ?? (input.visitorType === 'local' ? 'dpi' : 'passport'); if ((input.visitorType === 'local' && documentType !== 'dpi') || (input.visitorType === 'foreign' && documentType !== 'passport')) return c.json({ error: 'validation_error', message: 'El tipo de documento no corresponde al tipo de viajero.' }, 422); const db = getDb(c.env); const email = input.email.trim().toLowerCase(); const username = input.username.trim().toLowerCase(); const documentHash = await hashToken(input.documentNumber.trim().toUpperCase().replace(/[^A-Z0-9]/g, ''));
+  const input = parsed.data;
+  let googleIdentity: GoogleIdentity | undefined;
+  if (input.googleIdToken) {
+    try { googleIdentity = await verifyGoogleIdToken(c.env, input.googleIdToken); }
+    catch (error) { return c.json({ error: 'invalid_google_token', message: error instanceof Error ? error.message : 'No fue posible verificar tu cuenta de Google.' }, 401); }
+    if (googleIdentity.email !== input.email.trim().toLowerCase()) return c.json({ error: 'validation_error', message: 'El correo de Google no coincide con el correo del registro.' }, 422);
+  }
+  const documentType = input.documentType ?? (input.visitorType === 'local' ? 'dpi' : 'passport'); if ((input.visitorType === 'local' && documentType !== 'dpi') || (input.visitorType === 'foreign' && documentType !== 'passport')) return c.json({ error: 'validation_error', message: 'El tipo de documento no corresponde al tipo de viajero.' }, 422); const db = getDb(c.env); const email = googleIdentity?.email ?? input.email.trim().toLowerCase(); const username = input.username.trim().toLowerCase(); const documentHash = await hashToken(input.documentNumber.trim().toUpperCase().replace(/[^A-Z0-9]/g, ''));
   const duplicate = await db.select({ id: users.id, email: users.email, username: users.username }).from(users).where(sql`${users.email} = ${email} OR ${users.username} = ${username}`).limit(1);
   if (duplicate.length) return c.json({ error: 'account_exists', message: duplicate[0].email === email ? 'Ese correo ya estÃ¡ registrado.' : 'Ese nombre de usuario no estÃ¡ disponible.' }, 409);
   const documentInUse = await db.select({ userId: profiles.userId }).from(profiles).where(eq(profiles.registrationDocumentHash, documentHash)).limit(1);
   if (documentInUse.length) return c.json({ error: 'document_exists', message: documentType === 'dpi' ? 'Ese DPI ya está registrado.' : 'Ese número de pasaporte ya está registrado.' }, 409);
-  const passwordHash = await hashPassword(input.password);
+  const passwordHash = await hashPassword(input.password ?? randomToken(48));
   const result = await db.transaction(async (tx) => {
-    const [user] = await tx.insert(users).values({ email, username, passwordHash }).returning();
+    const [user] = await tx.insert(users).values({ email, username, passwordHash, emailVerifiedAt: googleIdentity ? new Date() : null }).returning();
     const [profile] = await tx.insert(profiles).values({
       userId: user.id,
       fullName: input.fullName.trim(),
@@ -278,6 +302,21 @@ app.post('/api/v1/auth/register', async (c) => {
   const verificationToken = randomToken(); await db.insert(authTokens).values({ userId: result.user.id, type: 'verify_email', tokenHash: await hashToken(verificationToken), expiresAt: new Date(Date.now() + 86400000) });
   const session = await issueSession(c.env, result.user.id, input.deviceName);
   return c.json({ ...session, user: publicUser(result.user, result.profile), ...(c.env.APP_ENV === 'development' ? { debugEmailVerificationToken: verificationToken } : {}) }, 201);
+});
+
+app.post('/api/v1/auth/google', async (c) => {
+  const parsed = googleLoginSchema.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: 'validation_error', message: 'Token de Google requerido.' }, 422);
+  let identity: GoogleIdentity;
+  try { identity = await verifyGoogleIdToken(c.env, parsed.data.idToken); }
+  catch (error) { return c.json({ error: 'invalid_google_token', message: error instanceof Error ? error.message : 'No fue posible verificar tu cuenta de Google.' }, 401); }
+  const db = getDb(c.env); const [user] = await db.select().from(users).where(eq(users.email, identity.email)).limit(1);
+  if (!user) return c.json({ onboardingRequired: true, identity: { email: identity.email, fullName: identity.fullName, avatarUrl: identity.avatarUrl } });
+  if (user.status !== 'active') return c.json({ error: 'account_disabled', message: 'La cuenta no está activa.' }, 403);
+  const [profile] = await db.select().from(profiles).where(eq(profiles.userId, user.id)).limit(1);
+  await db.update(users).set({ lastLoginAt: new Date(), emailVerifiedAt: user.emailVerifiedAt ?? new Date(), updatedAt: new Date() }).where(eq(users.id, user.id));
+  const session = await issueSession(c.env, user.id, parsed.data.deviceName);
+  return c.json({ ...session, user: publicUser(user, profile) });
 });
 
 app.post('/api/v1/auth/login', async (c) => {
