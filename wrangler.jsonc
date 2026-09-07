@@ -2,6 +2,12 @@
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "nomada-api",
 	"main": "src/index.ts",
+	"routes": [
+		{
+			"pattern": "api-nomada.innovasoftgt.com/*",
+			"zone_name": "innovasoftgt.com"
+		}
+	],
 	"compatibility_date": "2026-08-30",
 	"compatibility_flags": [
 		"nodejs_compat"
